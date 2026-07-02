@@ -8,6 +8,9 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
+// Location of the Python `ytmusicapi` bridge service (see /ytmusic-service).
+const YT_SERVICE_URL = (process.env.YT_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
+
 app.use(cors())
 app.use(express.json())
 
@@ -215,6 +218,74 @@ app.get('/api/works/:id', async (req, res) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// YT Music bridge (proxies the Python `ytmusicapi` service in /ytmusic-service)
+// Keeping these behind the Express origin means the frontend only talks to one
+// host and thumbnails come back CORS-clean for use as WebGL textures.
+// ---------------------------------------------------------------------------
+
+const ytUnavailable = (res: express.Response, err: any) => {
+  console.error('[YT_BRIDGE] Upstream error:', err?.message || err)
+  return res.status(503).json({
+    error: 'YT Music service unavailable. Start it with: cd ytmusic-service && python main.py',
+    results: []
+  })
+}
+
+// GET /api/yt/search?q=...&limit=...
+app.get('/api/yt/search', async (req, res) => {
+  const q = String(req.query.q || '').trim()
+  if (!q) return res.status(400).json({ error: 'Missing query parameter "q".', results: [] })
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40)
+  try {
+    const upstream = await fetch(
+      `${YT_SERVICE_URL}/search?q=${encodeURIComponent(q)}&limit=${limit}`
+    )
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return ytUnavailable(res, err)
+  }
+})
+
+// GET /api/yt/lyrics/:videoId
+app.get('/api/yt/lyrics/:videoId', async (req, res) => {
+  try {
+    const upstream = await fetch(
+      `${YT_SERVICE_URL}/lyrics/${encodeURIComponent(req.params.videoId)}`
+    )
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return ytUnavailable(res, err)
+  }
+})
+
+// GET /api/yt/thumb?u=<encoded image url>
+// Re-serves a YouTube thumbnail through our origin with permissive CORS so the
+// three.js TextureLoader can use it on the vinyl label without tainting the canvas.
+app.get('/api/yt/thumb', async (req, res) => {
+  const u = String(req.query.u || '')
+  if (!/^https:\/\/[a-z0-9.-]*(ytimg\.com|ggpht\.com|googleusercontent\.com)\//i.test(u)) {
+    return res.status(400).json({ error: 'Only YouTube image hosts are allowed.' })
+  }
+  try {
+    const upstream = await fetch(u)
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).json({ error: 'Failed to fetch thumbnail.' })
+    }
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    const buffer = Buffer.from(await upstream.arrayBuffer())
+    return res.end(buffer)
+  } catch (err) {
+    console.error('[YT_THUMB] Error:', (err as any)?.message || err)
+    return res.status(502).json({ error: 'Failed to fetch thumbnail.' })
+  }
+})
+
 app.listen(PORT, () => {
   console.log(`[SHAMA_API] Server listening at http://localhost:${PORT}`)
+  console.log(`[SHAMA_API] YT Music bridge -> ${YT_SERVICE_URL}`)
 })

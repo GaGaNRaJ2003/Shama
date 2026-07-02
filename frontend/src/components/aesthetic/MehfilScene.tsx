@@ -1,5 +1,5 @@
 import { Canvas, useFrame } from '@react-three/fiber'
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
 
 interface MehfilSceneProps {
@@ -208,7 +208,67 @@ function Moths() {
   )
 }
 
-// 3D Vinyl Record Deck component with front-facing tilt & translucent hover play/pause controls
+// Procedurally paints a black vinyl surface — thousands of fine concentric
+// grooves plus a faint anisotropic sheen — onto a canvas we use as the disc map.
+// This is what sells "real record": as the platter turns, the directional
+// light rakes across the grooves and a highlight sweeps around the disc.
+function useVinylGrooveTexture() {
+  return useMemo(() => {
+    if (typeof document === 'undefined') return null
+    const size = 1024
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = size
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+
+    const cx = size / 2
+    const cy = size / 2
+    const maxR = size / 2
+
+    // Deep vinyl black base.
+    ctx.fillStyle = '#08080a'
+    ctx.fillRect(0, 0, size, size)
+
+    // A broad radial sheen so the disc doesn't read as flat matte.
+    const sheen = ctx.createRadialGradient(cx, cy, maxR * 0.2, cx, cy, maxR)
+    sheen.addColorStop(0, 'rgba(40,40,46,0.0)')
+    sheen.addColorStop(0.55, 'rgba(58,58,66,0.10)')
+    sheen.addColorStop(0.85, 'rgba(30,30,36,0.0)')
+    ctx.fillStyle = sheen
+    ctx.fillRect(0, 0, size, size)
+
+    // Concentric grooves across the playing surface (label area left dark).
+    const grooveStart = maxR * 0.33
+    const grooveEnd = maxR * 0.99
+    for (let r = grooveStart; r < grooveEnd; r += 1.6) {
+      const jitter = Math.random() * 8
+      const shade = 14 + Math.floor(jitter)
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.strokeStyle = `rgba(${shade},${shade},${shade + 3},0.55)`
+      ctx.lineWidth = 0.8
+      ctx.stroke()
+    }
+
+    // A couple of brighter "land" bands between tracks, like a real LP.
+    for (const rr of [0.5, 0.68, 0.82]) {
+      ctx.beginPath()
+      ctx.arc(cx, cy, maxR * rr, 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(90,90,98,0.18)'
+      ctx.lineWidth = 3
+      ctx.stroke()
+    }
+
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.colorSpace = THREE.SRGBColorSpace
+    tex.anisotropy = 8
+    return tex
+  }, [])
+}
+
+// 3D Vinyl Record Deck: realistic black LP that spins clockwise with inertia
+// (spins up on play, coasts down on pause) and a tone-arm that drops onto the
+// groove while the music runs. Hover reveals a translucent play/pause control.
 function VinylRecord({
   isPlaying,
   coverUrl,
@@ -219,9 +279,13 @@ function VinylRecord({
   onTogglePlay?: () => void
 }) {
   const vinylGroupRef = useRef<THREE.Group>(null)
-  const currentSpeed = useRef(0)
+  const toneArmRef = useRef<THREE.Group>(null)
+  const angularVel = useRef(0) // rad/s, eased toward the 33rpm target
+  const armEngage = useRef(0) // 0 = parked/lifted, 1 = needle on groove
   const [texture, setTexture] = useState<THREE.Texture | null>(null)
   const [hovered, setHovered] = useState(false)
+
+  const grooveTexture = useVinylGrooveTexture()
 
   // Floating play/pause button opacity interpolation variables
   const buttonOpacity = useRef(0)
@@ -229,13 +293,14 @@ function VinylRecord({
   const iconMaterialRef1 = useRef<THREE.MeshBasicMaterial>(null)
   const iconMaterialRef2 = useRef<THREE.MeshBasicMaterial>(null)
 
-  // Load cover art texture dynamically
+  // Load cover art texture dynamically (used on the center label)
   useEffect(() => {
     if (!coverUrl) {
       setTexture(null)
       return
     }
     const loader = new THREE.TextureLoader()
+    loader.setCrossOrigin('anonymous')
     loader.load(
       coverUrl,
       (tex) => {
@@ -250,51 +315,65 @@ function VinylRecord({
     )
   }, [coverUrl])
 
-  useFrame(() => {
-    // Deceleration/Acceleration math
-    const targetSpeed = isPlaying ? 0.028 : 0
-    currentSpeed.current += (targetSpeed - currentSpeed.current) * 0.04
+  // 33 1/3 rpm in rad/s.
+  const SPIN_SPEED = (33.333 / 60) * Math.PI * 2
 
-    if (vinylGroupRef.current && currentSpeed.current > 0.0001) {
-      // Spin the vinyl disk flat relative to its face (local Y-axis)
-      vinylGroupRef.current.rotation.y += currentSpeed.current
+  useFrame((_, delta) => {
+    const d = Math.min(delta, 0.05) // clamp big frame gaps (tab refocus)
+
+    // Inertial platter: ease angular velocity toward target. Spin-up is a touch
+    // quicker than the coast-down so a paused record glides to rest like a real one.
+    const target = isPlaying ? SPIN_SPEED : 0
+    const ease = isPlaying ? 2.2 : 0.9
+    angularVel.current += (target - angularVel.current) * Math.min(1, d * ease)
+    if (vinylGroupRef.current && angularVel.current > 0.0002) {
+      // Negative local-Y rotation reads as clockwise from the viewer's side.
+      vinylGroupRef.current.rotation.y -= angularVel.current * d
+    }
+
+    // Tone-arm: swing in and lower onto the record while playing; lift + park when idle.
+    const armTarget = isPlaying ? 1 : 0
+    armEngage.current += (armTarget - armEngage.current) * Math.min(1, d * 3)
+    if (toneArmRef.current) {
+      const e = armEngage.current
+      toneArmRef.current.rotation.y = THREE.MathUtils.lerp(-0.22, 0.05, e) // swing over disc
+      toneArmRef.current.rotation.z = THREE.MathUtils.lerp(0.16, 0.0, e) // lift / drop
     }
 
     // Play/Pause button smooth hover fade-in
-    const targetOpacity = hovered ? 0.75 : 0
-    buttonOpacity.current += (targetOpacity - buttonOpacity.current) * 0.16
-
-    if (buttonMaterialRef.current) {
-      buttonMaterialRef.current.opacity = buttonOpacity.current
-    }
-    if (iconMaterialRef1.current) {
-      iconMaterialRef1.current.opacity = buttonOpacity.current * 1.3
-    }
-    if (iconMaterialRef2.current) {
-      iconMaterialRef2.current.opacity = buttonOpacity.current * 1.3
-    }
+    const targetOpacity = hovered ? 0.72 : 0
+    buttonOpacity.current += (targetOpacity - buttonOpacity.current) * Math.min(1, d * 10)
+    if (buttonMaterialRef.current) buttonMaterialRef.current.opacity = buttonOpacity.current
+    if (iconMaterialRef1.current) iconMaterialRef1.current.opacity = buttonOpacity.current * 1.3
+    if (iconMaterialRef2.current) iconMaterialRef2.current.opacity = buttonOpacity.current * 1.3
   })
 
   return (
-    <group 
-      position={[0.52, -0.05, 0]} 
+    <group
+      position={[0.52, -0.05, 0]}
       rotation={[0.32, -0.42, 0.08]} // Gorgeous front-facing perspective tilt
     >
-      {/* Platter Box Base */}
-      <mesh position={[0, -0.06, 0]}>
-        <boxGeometry args={[1.3, 0.1, 1.3]} />
-        <meshStandardMaterial color="#2d221b" metalness={0.7} roughness={0.3} />
+      {/* Wooden/matte plinth */}
+      <mesh position={[0, -0.07, 0]}>
+        <boxGeometry args={[1.32, 0.12, 1.32]} />
+        <meshStandardMaterial color="#241a14" metalness={0.35} roughness={0.7} />
       </mesh>
 
-      {/* Metal circular border */}
+      {/* Felt slipmat under the record */}
+      <mesh position={[0, -0.002, 0]}>
+        <cylinderGeometry args={[0.585, 0.585, 0.01, 64]} />
+        <meshStandardMaterial color="#3a2a20" roughness={0.95} metalness={0.0} />
+      </mesh>
+
+      {/* Metal platter rim */}
       <mesh position={[0, 0, 0]}>
-        <cylinderGeometry args={[0.59, 0.6, 0.03, 32]} />
-        <meshStandardMaterial color="#b2734a" metalness={0.9} roughness={0.15} />
+        <cylinderGeometry args={[0.6, 0.61, 0.03, 64]} />
+        <meshStandardMaterial color="#b2734a" metalness={0.92} roughness={0.18} />
       </mesh>
 
       {/* Interactive Platter Mesh (captures hover pointer and clicks) */}
       <mesh
-        position={[0, 0.025, 0]}
+        position={[0, 0.03, 0]}
         onPointerOver={(e) => {
           e.stopPropagation()
           setHovered(true)
@@ -309,65 +388,64 @@ function VinylRecord({
           if (onTogglePlay) onTogglePlay()
         }}
       >
-        <cylinderGeometry args={[0.565, 0.565, 0.015, 32]} />
+        <cylinderGeometry args={[0.57, 0.57, 0.02, 48]} />
         <meshBasicMaterial visible={false} />
       </mesh>
 
       {/* Rotating Vinyl Group */}
       <group ref={vinylGroupRef}>
-        {/* Vinyl Disc Body (groove details) */}
-        <mesh position={[0, 0.02, 0]}>
-          <cylinderGeometry args={[0.56, 0.56, 0.016, 64]} />
-          <meshPhysicalMaterial 
-            color="#eae4da" 
-            roughness={0.22} 
-            transmission={0.85} 
-            thickness={0.04}
-            transparent 
-            opacity={0.52} 
-            metalness={0.15} 
+        {/* Vinyl Disc Body — glossy black with procedural grooves */}
+        <mesh position={[0, 0.018, 0]} castShadow>
+          <cylinderGeometry args={[0.565, 0.565, 0.022, 96]} />
+          <meshPhysicalMaterial
+            color="#0b0b0d"
+            map={grooveTexture ?? undefined}
+            roughness={0.34}
+            metalness={0.2}
             clearcoat={1.0}
-            clearcoatRoughness={0.1}
+            clearcoatRoughness={0.16}
+            reflectivity={0.5}
           />
-        </mesh>
-        
-        {/* Record Grooves details */}
-        <mesh position={[0, 0.031, 0]}>
-          <cylinderGeometry args={[0.42, 0.42, 0.002, 32]} />
-          <meshStandardMaterial color="#1a1815" roughness={0.6} />
-        </mesh>
-        <mesh position={[0, 0.031, 0]}>
-          <cylinderGeometry args={[0.3, 0.3, 0.002, 32]} />
-          <meshStandardMaterial color="#1a1815" roughness={0.6} />
         </mesh>
 
         {/* Center Label (Cover Image / Copper backup) */}
-        <mesh position={[0, 0.032, 0]}>
-          <cylinderGeometry args={[0.18, 0.18, 0.01, 32]} />
+        <mesh position={[0, 0.03, 0]}>
+          <cylinderGeometry args={[0.175, 0.175, 0.006, 48]} />
           {texture ? (
-            <meshBasicMaterial map={texture} />
+            <meshStandardMaterial map={texture} roughness={0.55} metalness={0.05} />
           ) : (
-            <meshStandardMaterial color="#d98a5b" metalness={0.8} roughness={0.2} />
+            <meshStandardMaterial color="#d98a5b" metalness={0.7} roughness={0.35} />
           )}
         </mesh>
 
+        {/* Thin rim ring around the label (torus laid flat in the disc plane) */}
+        <mesh position={[0, 0.031, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.176, 0.004, 12, 48]} />
+          <meshStandardMaterial color="#1a1512" roughness={0.5} />
+        </mesh>
+
         {/* Spindle Center Hole */}
-        <mesh position={[0, 0.038, 0]}>
-          <cylinderGeometry args={[0.015, 0.015, 0.012, 16]} />
+        <mesh position={[0, 0.034, 0]}>
+          <cylinderGeometry args={[0.013, 0.013, 0.02, 16]} />
           <meshBasicMaterial color="#000000" />
+        </mesh>
+        {/* Spindle pin */}
+        <mesh position={[0, 0.05, 0]}>
+          <cylinderGeometry args={[0.01, 0.011, 0.05, 16]} />
+          <meshStandardMaterial color="#cfcfcf" metalness={0.95} roughness={0.15} />
         </mesh>
       </group>
 
       {/* Floating Translucent Glass Play/Pause Button on Hover */}
-      <group position={[0, 0.04, 0]}>
+      <group position={[0, 0.045, 0]}>
         {/* Transparent Disc Base */}
         <mesh>
-          <cylinderGeometry args={[0.18, 0.18, 0.004, 32]} />
-          <meshBasicMaterial 
-            ref={buttonMaterialRef} 
-            color="#0b0a09" 
-            transparent 
-            opacity={0} 
+          <cylinderGeometry args={[0.17, 0.17, 0.004, 32]} />
+          <meshBasicMaterial
+            ref={buttonMaterialRef}
+            color="#0b0a09"
+            transparent
+            opacity={0}
             depthWrite={false}
           />
         </mesh>
@@ -394,17 +472,33 @@ function VinylRecord({
         )}
       </group>
 
-      {/* Tone Arm Base */}
-      <mesh position={[0.5, 0.08, -0.48]}>
-        <cylinderGeometry args={[0.04, 0.05, 0.12, 16]} />
-        <meshStandardMaterial color="#b2734a" metalness={0.9} />
-      </mesh>
-      
-      {/* Tone Arm Stick */}
-      <mesh position={[0.32, 0.13, -0.16]} rotation={[-0.4, 0.4, -0.1]}>
-        <cylinderGeometry args={[0.01, 0.01, 0.58]} />
-        <meshStandardMaterial color="#eae4da" metalness={0.8} />
-      </mesh>
+      {/* Tone-arm assembly — pivots at the back-right, drops onto the record */}
+      <group ref={toneArmRef} position={[0.52, 0.07, -0.5]}>
+        {/* Pivot post */}
+        <mesh position={[0, 0.02, 0]}>
+          <cylinderGeometry args={[0.045, 0.055, 0.13, 20]} />
+          <meshStandardMaterial color="#b2734a" metalness={0.92} roughness={0.16} />
+        </mesh>
+        {/* Counterweight behind the pivot */}
+        <mesh position={[0.09, 0.08, -0.02]}>
+          <cylinderGeometry args={[0.035, 0.035, 0.06, 16]} />
+          <meshStandardMaterial color="#2a2320" metalness={0.6} roughness={0.4} />
+        </mesh>
+        {/* Arm tube reaching over the disc */}
+        <mesh position={[-0.22, 0.09, 0.26]} rotation={[-0.32, 0.62, -0.08]}>
+          <cylinderGeometry args={[0.011, 0.011, 0.66, 16]} />
+          <meshStandardMaterial color="#e7e2d8" metalness={0.85} roughness={0.25} />
+        </mesh>
+        {/* Head-shell + stylus at the far end */}
+        <mesh position={[-0.4, 0.055, 0.44]} rotation={[0, 0.6, 0]}>
+          <boxGeometry args={[0.05, 0.03, 0.03]} />
+          <meshStandardMaterial color="#1c1714" metalness={0.4} roughness={0.5} />
+        </mesh>
+        <mesh position={[-0.42, 0.035, 0.45]}>
+          <coneGeometry args={[0.006, 0.03, 12]} />
+          <meshStandardMaterial color="#cfcfcf" metalness={0.95} roughness={0.2} />
+        </mesh>
+      </group>
     </group>
   )
 }

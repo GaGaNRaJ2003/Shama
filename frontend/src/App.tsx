@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Play,
   Pause,
@@ -7,174 +7,29 @@ import {
   HelpCircle,
   FileText,
   VolumeX,
-  Search
+  Search,
+  Music,
+  Loader2
 } from 'lucide-react'
 import './App.css'
 import { ShaderBackdrop } from './components/aesthetic/ShaderBackdrop'
 import { LiquidLogoMark } from './components/aesthetic/LiquidLogoMark'
 import { MehfilScene } from './components/aesthetic/MehfilScene'
+import { YouTubePlayer } from './components/YouTubePlayer'
+import { catalog, type WorkData, type LineData } from './data/ghazals'
 
-interface VocabularyItem {
-  term: string
-  meaning: string
-}
+const API_BASE = 'http://localhost:5000'
 
-interface LineData {
-  id: string
-  urdu: string
-  hindi: string
-  roman: string
-  englishText: string
-  transliteration: string
-  translation: string
-  simple: string
-  detailed: string
-  vocabulary: VocabularyItem[]
-}
-
-interface WorkData {
-  id: string
+interface YtTrack {
+  videoId: string
   title: string
   artist: string
-  poet: string
-  form: string
-  audioUrl: string
+  album?: string
+  duration?: string
+  thumbnail?: string
   coverUrl?: string
-  lines: LineData[]
 }
 
-const catalog: WorkData[] = [
-  {
-    id: '01',
-    title: 'Dil-e-Nadaan Tujhe',
-    artist: 'Jagjit & Chitra Singh',
-    poet: 'Mirza Ghalib',
-    form: 'Ghazal',
-    audioUrl: 'https://ia801902.us.archive.org/30/items/mirza-ghalib-tv-serial-complete-all-ghazals-jagjit-singh-original/01%20-%20Dil-E-Nadaan%20Tujhe%20Hua%20Kya%20Hai.mp3',
-    coverUrl: '/cover_01.png',
-    lines: [
-      {
-        id: 'L01',
-        urdu: 'دلِ ناداں تجھے ہوا کیا ہے',
-        hindi: 'दिल-ए-नादाँ तुझे हुआ क्या है',
-        roman: 'dil-e-nadaan tujhe hua kya hai',
-        englishText: 'O innocent heart, what has happened to you?',
-        transliteration: 'Dil-e-nādān tujhe huā kyā hai',
-        translation: 'O naive, innocent heart, what is wrong with you?',
-        simple: 'The poet addresses their own foolish, innocent heart, questioning its sudden state of longing and agitation.',
-        detailed: 'Ghalib uses "dil-e-nadaan" (foolish/innocent heart) to create a dialogic tension between rational intellect and irrational emotion. It establishes a sense of helpless self-reflection.',
-        vocabulary: [
-          { term: 'Dil-e-nadaan', meaning: 'Innocent, naive, or foolish heart' },
-          { term: 'Tujhe', meaning: 'To you' },
-          { term: 'Hua kya hai', meaning: 'What has happened' }
-        ]
-      },
-      {
-        id: 'L02',
-        urdu: 'آخر اس درد کی دوا کیا ہے',
-        hindi: 'आख़िर इस दर्द की दवा क्या है',
-        roman: 'aakhir is dard ki dawa kya hai',
-        englishText: 'What cure can there finally be for this ache?',
-        transliteration: 'Ākhir is dard kī dawā kyā hai',
-        translation: 'What cure is there, ultimately, for this pain?',
-        simple: 'The poet asks what remedy could possibly soothe the emotional ache of longing that they feel.',
-        detailed: 'The word "dawa" (cure/medicine) contrasts with "dard" (emotional pain). Ghalib asks a rhetorical question, knowing that the pain of love and existence has no earthly cure.',
-        vocabulary: [
-          { term: 'Aakhir', meaning: 'After all, finally, or ultimately' },
-          { term: 'Dard', meaning: 'Pain or heartache' },
-          { term: 'Dawa', meaning: 'Cure, medicine, or remedy' }
-        ]
-      }
-    ]
-  },
-  {
-    id: '02',
-    title: 'Aaj Jaane Ki Zid',
-    artist: 'Farida Khanum',
-    poet: 'Fayyaz Hashmi',
-    form: 'Geet / Ghazal',
-    audioUrl: 'https://ia800104.us.archive.org/15/items/FaridaKhanumAajJaaneKiZidNaKaro/FaridaKhanum-AajJaaneKiZidNaKaro.mp3',
-    coverUrl: '/cover_02.png',
-    lines: [
-      {
-        id: 'L03',
-        urdu: 'آج جانے کی ضد نہ کرو',
-        hindi: 'आज जाने की ज़िद न करो',
-        roman: 'aaj jaane ki zid na karo',
-        englishText: 'Do not insist on leaving tonight',
-        transliteration: 'Āj jāne kī zid na karo',
-        translation: 'Do not insist on leaving today/tonight.',
-        simple: 'A gentle plea to the beloved to stay a little longer, begging them not to insist on departing.',
-        detailed: 'The refrain "zid na karo" represents the emotional desperation of the lover. The poem uses immediate conversational Hindi/Urdu which makes it deeply relatable.',
-        vocabulary: [
-          { term: 'Aaj', meaning: 'Today / Tonight' },
-          { term: 'Jaane ki', meaning: 'Of leaving / departing' },
-          { term: 'Zid', meaning: 'Obstinacy, insistence, or stubborn demand' }
-        ]
-      },
-      {
-        id: 'L04',
-        urdu: 'یوں ہی پہلو میں بیٹھے رہو',
-        hindi: 'यूॅं ही पहलू में बैठे रहो',
-        roman: 'yoon hi pehlu mein baithe raho',
-        englishText: 'Just keep sitting close beside me',
-        transliteration: 'Yūñ hī pehlū meñ baiṭhe raho',
-        translation: 'Just keep sitting by my side like this.',
-        simple: 'Asking the beloved to remain close, sitting side-by-side, sharing the physical space of intimacy.',
-        detailed: '"Pehlu" literally means side, flank, or lap. To sit in the "pehlu" is a classic South Asian idiom of romantic and protective proximity, symbolizing safety and affection.',
-        vocabulary: [
-          { term: 'Yoon hi', meaning: 'Just like this, casually' },
-          { term: 'Pehlu', meaning: 'Flank, side, lap, or close proximity' },
-          { term: 'Baithe raho', meaning: 'Keep sitting' }
-        ]
-      }
-    ]
-  },
-  {
-    id: '03',
-    title: 'Gulon Mein Rang Bhare',
-    artist: 'Mehdi Hassan',
-    poet: 'Faiz Ahmed Faiz',
-    form: 'Ghazal',
-    audioUrl: 'https://ia803407.us.archive.org/15/items/MehdiHassanGulonMeinRangBhare/MehdiHassan-GulonMeinRangBhare.mp3',
-    coverUrl: '/cover_03.png',
-    lines: [
-      {
-        id: 'L05',
-        urdu: 'گلوں میں رنگ بھرے بادِ نوبہار چلے',
-        hindi: 'गुलों में रंग भरे बाद-ए-नौबहार चले',
-        roman: 'gulon mein rang bhare baad-e-naubahar chale',
-        englishText: 'Let the flowers fill with color, let the spring breeze blow',
-        transliteration: 'Gulōñ meñ raṅg bhare bād-e-naubahār chale',
-        translation: 'May the flowers fill with color, and the spring breeze start blowing.',
-        simple: 'The poet wishes for spring to return to the garden, hoping the flowers bloom and the wind refreshes the earth.',
-        detailed: 'Written while Faiz was imprisoned, this verse operates on two levels: a romantic longing for the beloved and a revolutionary call for political awakening (spring) to revive the nation (garden).',
-        vocabulary: [
-          { term: 'Gulon', meaning: 'Flowers' },
-          { term: 'Rang bhare', meaning: 'Fill with color' },
-          { term: 'Baad-e-naubahar', meaning: 'Breeze of early spring' },
-          { term: 'Chale', meaning: 'Let it move / blow' }
-        ]
-      },
-      {
-        id: 'L06',
-        urdu: 'چلے بھی آؤ کہ گلشن کا کاروبار چلے',
-        hindi: 'چلے بھی آؤ کہ گلشن کا کاروبار چلے',
-        roman: 'chale bhi aao ke gulshan ka karobar chale',
-        englishText: 'Come back now, so the business of the garden can resume',
-        transliteration: 'Chale bhī āo ke gulshan kā kārobār chale',
-        translation: 'Come back, so that the normal business of the garden may proceed.',
-        simple: 'Imploring the beloved to return, because without them, the beauty of the garden is idle and lifeless.',
-        detailed: 'The phrase "gulshan ka karobar" (the business of the garden) is an ironic, beautiful coupling of commerce and nature. It signifies that the poet’s entire universe remains halted until the beloved returns.',
-        vocabulary: [
-          { term: 'Chale aao', meaning: 'Come along / return' },
-          { term: 'Gulshan', meaning: 'Garden / homeland' },
-          { term: 'Karobar', meaning: 'Business, affairs, or daily commerce' }
-        ]
-      }
-    ]
-  }
-]
 
 export function App() {
   const [worksList, setWorksList] = useState<any[]>(catalog)
@@ -188,8 +43,8 @@ export function App() {
   const [isMuted, setIsMuted] = useState<boolean>(false)
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false)
 
-  // Console View state: 'LISTENING' | 'CATALOG' | 'FEATURED'
-  const [currentView, setCurrentView] = useState<'LISTENING' | 'CATALOG' | 'FEATURED'>('LISTENING')
+  // Console View state
+  const [currentView, setCurrentView] = useState<'LISTENING' | 'CATALOG' | 'FEATURED' | 'YTMUSIC'>('LISTENING')
   const [searchTerm, setSearchTerm] = useState<string>('')
 
   // Playable Audio Refs & Timestamps
@@ -197,22 +52,71 @@ export function App() {
   const [currentTime, setCurrentTime] = useState<number>(0)
   const [duration, setDuration] = useState<number>(0)
 
+  // Playback engine: curated archive.org MP3s vs. YouTube Music (IFrame player).
+  // Curated ghazals stream through YouTube by default (archive.org node URLs
+  // rotate and 404), falling back to the archive audio only if no video resolves.
+  const [playbackSource, setPlaybackSource] = useState<'archive' | 'youtube'>('youtube')
+  const [ytTrack, setYtTrack] = useState<YtTrack | null>(null) // a pure YT-search selection
+  const [ytVideoId, setYtVideoId] = useState<string | null>(null) // id loaded in the IFrame player
+  const [ytSeek, setYtSeek] = useState<number | null>(null)
+  const [resolving, setResolving] = useState<boolean>(false)
+  const [playbackNote, setPlaybackNote] = useState<string | null>(null)
+  const resolvedWorkRef = useRef<string | null>(null) // activeWork.id the current ytVideoId belongs to
+
+  // YT Music search state
+  const [ytQuery, setYtQuery] = useState<string>('')
+  const [ytResults, setYtResults] = useState<YtTrack[]>([])
+  const [ytLoading, setYtLoading] = useState<boolean>(false)
+  const [ytError, setYtError] = useState<string | null>(null)
+  const [ytLyrics, setYtLyrics] = useState<{ text: string | null; source: string | null; loading: boolean }>(
+    { text: null, source: null, loading: false }
+  )
+
+  // `isYT` == showing the pure YT-Music content panel (lyrics, no couplets).
+  const isYT = !!ytTrack
+  const isStreaming = playbackSource === 'youtube'
+
+  // Mehfil Mode (couplets synced to the singer) + timestamp authoring.
+  const [mehfilSync, setMehfilSync] = useState<boolean>(true)
+  const [stampMode, setStampMode] = useState<boolean>(false)
+  const [stamps, setStamps] = useState<Record<string, Record<string, number>>>({})
+
+  // A couplet's start time: a user-authored stamp overrides the seed value.
+  const lineTime = (work: WorkData, line: LineData): number | null => {
+    const s = stamps[work.id]?.[line.id]
+    if (typeof s === 'number') return s
+    return typeof line.t === 'number' ? line.t : null
+  }
+  const hasTimestamps = activeWork.lines.some((l) => lineTime(activeWork, l) !== null)
+
+  // The couplet the singer is currently on (last one whose start time has passed).
+  const activeSyncLineId = useMemo(() => {
+    if (isYT) return null
+    let current: string | null = null
+    for (const l of activeWork.lines) {
+      const t = lineTime(activeWork, l)
+      if (t !== null && t <= currentTime + 0.15) current = l.id
+    }
+    return current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTime, activeWork, stamps, isYT])
+
   // Fetch list of works on mount
   useEffect(() => {
-    fetch('http://localhost:5000/api/works')
+    fetch(`${API_BASE}/api/works`)
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          // Merge local audio URLs to API headers if database urls aren't hydrated
-          const enriched = data.map((item: any) => {
-            const localMatch = catalog.find((c) => c.id === item.id)
-            return {
+          // The local catalog is authoritative for couplets + meanings; the API
+          // only contributes any *extra* works it knows about that we don't.
+          const extras = data
+            .filter((item: any) => !catalog.some((c) => c.id === item.id))
+            .map((item: any) => ({
               ...item,
-              audioUrl: item.audio_url || item.audioUrl || (localMatch ? localMatch.audioUrl : ''),
-              coverUrl: item.cover_url || item.coverUrl || (localMatch ? localMatch.coverUrl : '')
-            }
-          })
-          setWorksList(enriched)
+              audioUrl: item.audio_url || item.audioUrl || '',
+              coverUrl: item.cover_url || item.coverUrl || ''
+            }))
+          if (extras.length > 0) setWorksList([...catalog, ...extras])
         }
       })
       .catch(() => {
@@ -220,20 +124,19 @@ export function App() {
       })
   }, [])
 
-  // Sync Audio source when activeWork changes
+  // A curated work changed → reset the transport. Playback (re)starts on demand
+  // via handlePlayPause, which resolves a YouTube video for the work.
   useEffect(() => {
+    resolvedWorkRef.current = null
+    setYtVideoId(null)
+    setIsPlaying(false)
+    setPlaybackProgress(0)
+    setCurrentTime(0)
+    setDuration(0)
+    setPlaybackNote(null)
     if (audioRef.current) {
-      audioRef.current.src = activeWork.audioUrl
-      audioRef.current.load()
-      if (isPlaying) {
-        audioRef.current.play().catch((err) => {
-          console.log('[AUDIO_PLAY_BLOCKED] Autoplay waiting for interaction:', err.message)
-          setIsPlaying(false)
-        })
-      } else {
-        setPlaybackProgress(0)
-        setCurrentTime(0)
-      }
+      audioRef.current.pause()
+      audioRef.current.src = activeWork.audioUrl || ''
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWork])
@@ -245,21 +148,218 @@ export function App() {
     }
   }, [volume, isMuted])
 
-  const handlePlayPause = () => {
-    if (!audioRef.current) return
-    if (isPlaying) {
-      audioRef.current.pause()
-      setIsPlaying(false)
-    } else {
-      audioRef.current.play().then(() => {
-        setIsPlaying(true)
-      }).catch((err) => {
-        console.error('[AUDIO_PLAY_FAILED]', err.message)
+  // Load any locally-authored couplet timestamps once.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('shama.stamps')
+      if (raw) setStamps(JSON.parse(raw))
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  // Mehfil Mode: follow the singer — select + scroll the active couplet into view.
+  useEffect(() => {
+    if (!mehfilSync || !activeSyncLineId) return
+    const line = activeWork.lines.find((l) => l.id === activeSyncLineId)
+    if (line && line.id !== activeLine.id) setActiveLine(line)
+    if (typeof document !== 'undefined') {
+      document.getElementById(`sher-${activeSyncLineId}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
       })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSyncLineId, mehfilSync])
+
+  // Shared progress writer used by both the <audio> element and the YT player.
+  const updateProgress = (current: number, dur: number) => {
+    setCurrentTime(current)
+    setDuration(dur)
+    setPlaybackProgress(dur > 0 ? (current / dur) * 100 : 0)
+  }
+
+  const seekTo = (sec: number) => {
+    if (playbackSource === 'youtube') setYtSeek(sec)
+    else if (audioRef.current) audioRef.current.currentTime = sec
+  }
+
+  // ---- Timestamp authoring (tap-to-sync) -----------------------------------
+  const persistStamps = (next: Record<string, Record<string, number>>) => {
+    try {
+      localStorage.setItem('shama.stamps', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+  }
+  const stampCouplet = (lineId: string) => {
+    setStamps((prev) => {
+      const next = {
+        ...prev,
+        [activeWork.id]: {
+          ...(prev[activeWork.id] || {}),
+          [lineId]: Math.max(0, Math.round(currentTime * 10) / 10)
+        }
+      }
+      persistStamps(next)
+      return next
+    })
+  }
+  const clearStamps = () => {
+    setStamps((prev) => {
+      const next = { ...prev }
+      delete next[activeWork.id]
+      persistStamps(next)
+      return next
+    })
+  }
+  const exportStamps = () => {
+    const out = activeWork.lines.map((l) => ({ id: l.id, t: lineTime(activeWork, l) }))
+    const json = JSON.stringify(out, null, 2)
+    try {
+      navigator.clipboard?.writeText(json)
+    } catch {
+      /* ignore */
+    }
+    if (typeof document !== 'undefined') {
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${activeWork.id}-timestamps.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+  const mukarrar = () => {
+    const line = activeWork.lines.find((l) => l.id === activeLine.id) || activeWork.lines[0]
+    const t = lineTime(activeWork, line)
+    if (t !== null) {
+      seekTo(t)
+      if (!isPlaying) handlePlayPause()
+    }
+  }
+
+  // Resolve a YouTube video for a curated work (cached per work id).
+  const ensureCuratedVideo = async (work: WorkData): Promise<string | null> => {
+    if (ytVideoId && resolvedWorkRef.current === work.id) return ytVideoId
+    setResolving(true)
+    try {
+      const q = (work.ytQuery || `${work.title} ${work.artist}`).trim()
+      const res = await fetch(`${API_BASE}/api/yt/search?q=${encodeURIComponent(q)}&limit=1`)
+      const data = await res.json()
+      const vid: string | null = data.results?.[0]?.videoId || null
+      resolvedWorkRef.current = vid ? work.id : null
+      setYtVideoId(vid)
+      return vid
+    } catch {
+      return null
+    } finally {
+      setResolving(false)
+    }
+  }
+
+  const handlePlayPause = async () => {
+    // Pure YT-search track: flip intent, the IFrame player reports the real state.
+    if (ytTrack) {
+      setIsPlaying((prev) => !prev)
+      return
+    }
+    // Curated work.
+    if (isPlaying) {
+      setIsPlaying(false)
+      if (playbackSource === 'archive' && audioRef.current) audioRef.current.pause()
+      return
+    }
+    setPlaybackNote(null)
+    setPlaybackSource('youtube')
+    const vid =
+      ytVideoId && resolvedWorkRef.current === activeWork.id
+        ? ytVideoId
+        : await ensureCuratedVideo(activeWork)
+    if (vid) {
+      setIsPlaying(true)
+      return
+    }
+    // Fallback: try the (often stale) archive.org source directly.
+    setPlaybackSource('archive')
+    if (audioRef.current && activeWork.audioUrl) {
+      try {
+        await audioRef.current.play()
+        setIsPlaying(true)
+      } catch (err) {
+        console.warn('[SHAMA] No playable source for', activeWork.title, (err as any)?.message)
+        setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+      }
+    } else {
+      setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+    }
+  }
+
+  // ---- YouTube Music -------------------------------------------------------
+  const runYtSearch = (e?: React.FormEvent) => {
+    if (e) e.preventDefault()
+    const q = ytQuery.trim()
+    if (!q) return
+    setYtLoading(true)
+    setYtError(null)
+    fetch(`${API_BASE}/api/yt/search?q=${encodeURIComponent(q)}&limit=24`)
+      .then((res) => res.json())
+      .then((data) => {
+        const results: YtTrack[] = (data.results || []).map((r: any) => ({
+          videoId: r.videoId,
+          title: r.title,
+          artist: r.artist || (r.artists ? r.artists.join(', ') : 'Unknown Artist'),
+          album: r.album,
+          duration: r.duration,
+          thumbnail: r.thumbnail,
+          coverUrl: r.thumbnail ? `${API_BASE}/api/yt/thumb?u=${encodeURIComponent(r.thumbnail)}` : undefined
+        }))
+        setYtResults(results)
+        if (results.length === 0) setYtError(data.error || 'No results found for that search.')
+        setYtLoading(false)
+      })
+      .catch(() => {
+        setYtResults([])
+        setYtError('YT Music service is unreachable. Start it with: cd ytmusic-service && python main.py')
+        setYtLoading(false)
+      })
+  }
+
+  const fetchYtLyrics = (videoId: string) => {
+    setYtLyrics({ text: null, source: null, loading: true })
+    fetch(`${API_BASE}/api/yt/lyrics/${videoId}`)
+      .then((res) => res.json())
+      .then((data) => {
+        setYtLyrics({ text: data.lyrics || null, source: data.source || null, loading: false })
+      })
+      .catch(() => setYtLyrics({ text: null, source: null, loading: false }))
+  }
+
+  const playYtTrack = (track: YtTrack) => {
+    // Stop the archive audio engine and hand playback to YouTube.
+    if (audioRef.current) audioRef.current.pause()
+    setPlaybackSource('youtube')
+    setYtTrack(track)
+    setYtVideoId(track.videoId)
+    resolvedWorkRef.current = null
+    setPlaybackNote(null)
+    setCurrentTime(0)
+    setDuration(0)
+    setPlaybackProgress(0)
+    setIsPlaying(true)
+    setCurrentView('LISTENING')
+    fetchYtLyrics(track.videoId)
+    if (isSpeaking) {
+      window.speechSynthesis.cancel()
+      setIsSpeaking(false)
     }
   }
 
   const handleWorkSelect = (work: any) => {
+    // Selecting a curated work drops any pure-YT selection; the activeWork
+    // effect then resets the transport (playback restarts on demand).
+    setYtTrack(null)
     if (work.lines && work.lines.length > 0) {
       setActiveWork(work)
       setActiveLine(work.lines[0])
@@ -267,7 +367,7 @@ export function App() {
     }
 
     // Fetch full details from API
-    fetch(`http://localhost:5000/api/works/${work.id}`)
+    fetch(`${API_BASE}/api/works/${work.id}`)
       .then((res) => res.json())
       .then((data) => {
         if (data && data.lines && data.lines.length > 0) {
@@ -316,8 +416,9 @@ export function App() {
       return
     }
 
-    const textToSpeak =
-      activeTab === 'SIMPLE'
+    const textToSpeak = isYT
+      ? ytLyrics.text || `Now playing ${ytTrack?.title} by ${ytTrack?.artist} from YouTube Music.`
+      : activeTab === 'SIMPLE'
         ? activeLine.simple
         : activeTab === 'LITERARY'
         ? activeLine.detailed
@@ -364,45 +465,78 @@ export function App() {
       work.artist.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const activateCuratorSelection = (workId: string) => {
+  const activateCuratorSelection = async (workId: string) => {
     const matched = worksList.find((w) => w.id === workId)
-    if (matched) {
-      handleWorkSelect(matched)
-      setIsPlaying(true)
-      setCurrentView('LISTENING')
-      // Wait briefly for state loading then play
-      setTimeout(() => {
-        if (audioRef.current) {
-          audioRef.current.play().catch(() => {})
-        }
-      }, 300)
-    }
+    if (!matched) return
+    handleWorkSelect(matched)
+    setCurrentView('LISTENING')
+    // Resolve this curated work on YouTube and start playing.
+    const work = (matched.lines && matched.lines.length > 0
+      ? matched
+      : catalog.find((c) => c.id === workId)) as WorkData | undefined
+    if (!work) return
+    setPlaybackSource('youtube')
+    const vid = await ensureCuratedVideo(work)
+    if (vid) setIsPlaying(true)
+    else setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
   }
+
+  // Now-playing metadata resolves from whichever engine is active.
+  const nowTitle = isYT ? ytTrack!.title : activeWork.title
+  const nowArtist = isYT ? ytTrack!.artist : activeWork.artist
+  const nowCover = isYT ? ytTrack!.coverUrl : activeWork.coverUrl
 
   return (
     <main className="shama-shell">
       <div className="noise-overlay" />
       <ShaderBackdrop />
 
-      {/* Hidden audio tag context */}
+      {/* Archive.org audio engine (fallback for curated catalog) */}
       <audio
         ref={audioRef}
         src={activeWork.audioUrl}
-        preload="auto"
+        preload="none"
         onTimeUpdate={() => {
-          if (audioRef.current) {
-            const current = audioRef.current.currentTime
-            setCurrentTime(current)
-            const pct = (current / duration) * 100
-            setPlaybackProgress(isNaN(pct) ? 0 : pct)
+          if (audioRef.current && playbackSource === 'archive') {
+            updateProgress(audioRef.current.currentTime, duration || audioRef.current.duration || 0)
           }
         }}
         onLoadedMetadata={() => {
-          if (audioRef.current) {
+          if (audioRef.current && playbackSource === 'archive') {
             setDuration(audioRef.current.duration)
           }
         }}
+        onError={() => {
+          // Only meaningful while the archive engine is actually driving playback.
+          if (playbackSource === 'archive' && isPlaying) {
+            setIsPlaying(false)
+            setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+          }
+        }}
         onEnded={() => {
+          if (playbackSource !== 'archive') return
+          setIsPlaying(false)
+          setPlaybackProgress(0)
+          setCurrentTime(0)
+        }}
+      />
+
+      {/* YouTube Music engine (headless IFrame player) */}
+      <YouTubePlayer
+        videoId={playbackSource === 'youtube' ? ytVideoId : null}
+        playing={playbackSource === 'youtube' && isPlaying}
+        volume={volume}
+        muted={isMuted}
+        seekTo={ytSeek}
+        onSeekConsumed={() => setYtSeek(null)}
+        onProgress={(current, dur) => {
+          if (playbackSource === 'youtube') updateProgress(current, dur)
+        }}
+        onPlayStateChange={(playing) => {
+          if (playbackSource === 'youtube') setIsPlaying(playing)
+        }}
+        onEnded={() => {
+          if (playbackSource !== 'youtube') return
           setIsPlaying(false)
           setPlaybackProgress(0)
           setCurrentTime(0)
@@ -449,6 +583,15 @@ export function App() {
                 onClick={() => setCurrentView('FEATURED')}
               >
                 [03] Curator Picks
+              </button>
+              <button
+                type="button"
+                className={`console-nav-btn ${
+                  currentView === 'YTMUSIC' ? 'console-nav-btn--active' : ''
+                }`}
+                onClick={() => setCurrentView('YTMUSIC')}
+              >
+                [04] YT Music
               </button>
             </nav>
           </div>
@@ -500,13 +643,31 @@ export function App() {
               <div className="panel-header">
                 <h2 className="panel-title">[02] PLAYBACK PANEL</h2>
                 <div className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
-                  {activeWork.artist.toUpperCase()}
+                  {isYT ? 'YT MUSIC' : nowArtist.toUpperCase()}
                 </div>
               </div>
 
               {/* 3D Scene Viewport */}
               <div className="scene-deck">
-                <MehfilScene isPlaying={isPlaying} coverUrl={activeWork.coverUrl} onTogglePlay={handlePlayPause} />
+                <MehfilScene isPlaying={isPlaying} coverUrl={nowCover} onTogglePlay={handlePlayPause} />
+              </div>
+
+              {/* Now-playing strip */}
+              <div className="now-playing-strip">
+                <div className="now-playing-meta">
+                  <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
+                    {resolving
+                      ? '⟳ RESOLVING · YT MUSIC'
+                      : isStreaming
+                      ? '▶ STREAMING · YT MUSIC'
+                      : '▶ ARCHIVE DECK'}
+                  </span>
+                  <div className="now-playing-title">{nowTitle}</div>
+                  <div className="item-sub-text">{nowArtist}</div>
+                  {playbackNote && (
+                    <div className="playback-note">{playbackNote}</div>
+                  )}
+                </div>
               </div>
 
               {/* Hardware-like Audio Player Deck */}
@@ -516,10 +677,17 @@ export function App() {
                     type="button"
                     className="console-btn console-btn--primary"
                     onClick={handlePlayPause}
+                    disabled={resolving}
                     aria-label={isPlaying ? 'Pause' : 'Play'}
                   >
-                    {isPlaying ? <Pause size={14} /> : <Play size={14} />}
-                    <span>{isPlaying ? 'PAUSE' : 'PLAY'}</span>
+                    {resolving ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : isPlaying ? (
+                      <Pause size={14} />
+                    ) : (
+                      <Play size={14} />
+                    )}
+                    <span>{resolving ? 'LOADING' : isPlaying ? 'PAUSE' : 'PLAY'}</span>
                   </button>
                 </div>
 
@@ -530,7 +698,10 @@ export function App() {
                     const rect = e.currentTarget.getBoundingClientRect()
                     const clickX = e.clientX - rect.left
                     const percentage = clickX / rect.width
-                    if (audioRef.current && duration) {
+                    if (!duration) return
+                    if (playbackSource === 'youtube') {
+                      setYtSeek(percentage * duration)
+                    } else if (audioRef.current) {
                       audioRef.current.currentTime = percentage * duration
                     }
                   }}
@@ -596,50 +767,165 @@ export function App() {
                 </div>
               </div>
 
-              {/* Script Toggles */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
-                  borderBottom: '1px solid var(--color-border)',
-                  background: 'rgba(16, 13, 11, 0.4)'
-                }}
-              >
-                {(['URDU', 'HINDI', 'ROMAN', 'ENGLISH'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`tab-btn ${scriptMode === mode ? 'tab-btn--active' : ''}`}
-                    onClick={() => setScriptMode(mode)}
-                    style={{ borderBottom: 'none' }}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-
-              {/* Lyrics Sheet Scroll */}
-              <div className="panel-content lyrics-deck" style={{ padding: 0 }}>
-                {activeWork.lines.map((line, index) => (
+              {!isYT ? (
+                <>
+                  {/* Script Toggles */}
                   <div
-                    key={line.id}
-                    className={`sher-block ${
-                      activeLine.id === line.id ? 'sher-block--active' : ''
-                    }`}
-                    onClick={() => handleLineSelect(line)}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(4, 1fr)',
+                      borderBottom: '1px solid var(--color-border)',
+                      background: 'rgba(16, 13, 11, 0.4)'
+                    }}
                   >
-                    <div
-                      className="mono-tag"
-                      style={{ fontSize: '0.66rem', color: 'var(--color-accent)', marginBottom: '8px' }}
-                    >
-                      COUPLET // [0{index + 1}]
-                    </div>
-                    <h3 className="verse-original">{renderScriptText(line)}</h3>
-                    <p className="verse-translit">↳ {line.transliteration}</p>
-                    <p className="verse-trans">{line.translation}</p>
+                    {(['URDU', 'HINDI', 'ROMAN', 'ENGLISH'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`tab-btn ${scriptMode === mode ? 'tab-btn--active' : ''}`}
+                        onClick={() => setScriptMode(mode)}
+                        style={{ borderBottom: 'none' }}
+                      >
+                        {mode}
+                      </button>
+                    ))}
                   </div>
-                ))}
-              </div>
+
+                  {/* Mehfil Mode toolbar */}
+                  <div className="mehfil-bar">
+                    <div className="mehfil-bar-left">
+                      <button
+                        type="button"
+                        className={`mehfil-chip ${mehfilSync ? 'mehfil-chip--on' : ''}`}
+                        onClick={() => setMehfilSync((v) => !v)}
+                        title="Auto-scroll and reveal meaning as the singer reaches each couplet"
+                      >
+                        {mehfilSync ? '◉' : '○'} FOLLOW SINGER
+                      </button>
+                      <button
+                        type="button"
+                        className="mehfil-chip"
+                        onClick={mukarrar}
+                        title="Replay the current couplet"
+                        disabled={!hasTimestamps}
+                      >
+                        ↺ MUKARRAR
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className={`mehfil-chip ${stampMode ? 'mehfil-chip--rec' : ''}`}
+                      onClick={() => setStampMode((v) => !v)}
+                      title="Author couplet timestamps by tapping each couplet as the singer reaches it"
+                    >
+                      {stampMode ? '● SYNCING' : 'SYNC COUPLETS'}
+                    </button>
+                  </div>
+
+                  {stampMode && (
+                    <div className="stamp-hint">
+                      Play the ghazal and tap each couplet the instant the singer begins it. Times
+                      save automatically.
+                      <div className="stamp-actions">
+                        <button type="button" className="mehfil-chip" onClick={exportStamps}>
+                          ⤓ EXPORT JSON
+                        </button>
+                        <button type="button" className="mehfil-chip" onClick={clearStamps}>
+                          ✕ CLEAR
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!hasTimestamps && !stampMode && (
+                    <div className="stamp-hint">
+                      Reader mode — tap any couplet to jump the audio there. Turn on{' '}
+                      <strong>Sync couplets</strong> to teach Shama the timings and unlock live
+                      Mehfil Mode.
+                    </div>
+                  )}
+
+                  {/* Lyrics Sheet Scroll */}
+                  <div className="panel-content lyrics-deck" style={{ padding: 0 }}>
+                    {activeWork.lines.map((line, index) => {
+                      const t = lineTime(activeWork, line)
+                      const isSyncActive = activeSyncLineId === line.id
+                      const isSelected = activeLine.id === line.id
+                      return (
+                        <div
+                          id={`sher-${line.id}`}
+                          key={line.id}
+                          className={`sher-block ${isSelected ? 'sher-block--active' : ''} ${
+                            isSyncActive ? 'sher-block--singing' : ''
+                          } ${stampMode ? 'sher-block--stamp' : ''}`}
+                          onClick={() => {
+                            if (stampMode) {
+                              stampCouplet(line.id)
+                              return
+                            }
+                            handleLineSelect(line)
+                            if (t !== null) seekTo(t)
+                          }}
+                        >
+                          <div className="sher-meta-row">
+                            <div
+                              className="mono-tag"
+                              style={{ fontSize: '0.66rem', color: 'var(--color-accent)' }}
+                            >
+                              COUPLET // [0{index + 1}]
+                            </div>
+                            {(t !== null || stampMode) && (
+                              <span className={`stamp-badge ${t !== null ? 'stamp-badge--set' : ''}`}>
+                                {t !== null ? `⏱ ${formatTime(t)}` : 'TAP TO STAMP'}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="verse-original">{renderScriptText(line)}</h3>
+                          <p className="verse-translit">↳ {line.transliteration}</p>
+                          <p className="verse-trans">{line.translation}</p>
+                          {isSyncActive && mehfilSync && (
+                            <div className="sher-reveal">
+                              <span className="sher-reveal-label">MA&apos;NI · MEANING</span>
+                              {line.simple}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                /* YouTube Music lyrics sheet */
+                <div className="panel-content lyrics-deck" style={{ padding: '0' }}>
+                  <div className="yt-lyrics-header">
+                    <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
+                      LYRICS
+                    </span>
+                    {ytLyrics.source && (
+                      <span className="item-sub-text">SOURCE // {ytLyrics.source}</span>
+                    )}
+                  </div>
+                  <div className="yt-lyrics-body">
+                    {ytLyrics.loading ? (
+                      <div className="yt-lyrics-empty">
+                        <Loader2 size={16} className="spin" /> Fetching lyrics…
+                      </div>
+                    ) : ytLyrics.text ? (
+                      ytLyrics.text.split('\n').map((line, i) => (
+                        <p key={i} className="yt-lyric-line">
+                          {line.trim() === '' ? ' ' : line}
+                        </p>
+                      ))
+                    ) : (
+                      <div className="yt-lyrics-empty">
+                        No synced lyrics available for this track on YouTube Music.
+                        <br />
+                        Enjoy the ghazal — the vinyl turns while it plays.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </section>
 
             {/* Panel 3: Annotation Companion Deck */}
@@ -650,78 +936,122 @@ export function App() {
               </div>
 
               {/* Tab Deck */}
-              <div className="tab-deck">
-                <button
-                  type="button"
-                  className={`tab-btn ${activeTab === 'SIMPLE' ? 'tab-btn--active' : ''}`}
-                  onClick={() => setActiveTab('SIMPLE')}
-                >
-                  <BookOpen size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                  <span>Simple</span>
-                </button>
-                <button
-                  type="button"
-                  className={`tab-btn ${activeTab === 'LITERARY' ? 'tab-btn--active' : ''}`}
-                  onClick={() => setActiveTab('LITERARY')}
-                >
-                  <FileText size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                  <span>Poetic</span>
-                </button>
-                <button
-                  type="button"
-                  className={`tab-btn ${activeTab === 'GLOSSARY' ? 'tab-btn--active' : ''}`}
-                  onClick={() => setActiveTab('GLOSSARY')}
-                >
-                  <HelpCircle size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                  <span>Glossary</span>
-                </button>
-              </div>
+              {!isYT && (
+                <div className="tab-deck">
+                  <button
+                    type="button"
+                    className={`tab-btn ${activeTab === 'SIMPLE' ? 'tab-btn--active' : ''}`}
+                    onClick={() => setActiveTab('SIMPLE')}
+                  >
+                    <BookOpen size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                    <span>Simple</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`tab-btn ${activeTab === 'LITERARY' ? 'tab-btn--active' : ''}`}
+                    onClick={() => setActiveTab('LITERARY')}
+                  >
+                    <FileText size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                    <span>Poetic</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`tab-btn ${activeTab === 'GLOSSARY' ? 'tab-btn--active' : ''}`}
+                    onClick={() => setActiveTab('GLOSSARY')}
+                  >
+                    <HelpCircle size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                    <span>Glossary</span>
+                  </button>
+                </div>
+              )}
 
               <div className="panel-content">
-                {/* Selected Line Header */}
-                <div
-                  style={{
-                    marginBottom: '18px',
-                    borderBottom: '1px solid var(--color-border)',
-                    paddingBottom: '12px'
-                  }}
-                >
-                  <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
-                    ACTIVE COUPLET DETAIL
-                  </span>
-                  <p className="verse-translit" style={{ marginTop: '8px', fontSize: '0.86rem' }}>
-                    "{activeLine.roman}"
-                  </p>
-                </div>
-
-                {/* Tab Content Display */}
-                {activeTab === 'SIMPLE' && (
-                  <div className="explanation-card">
-                    <div className="explanation-card-header">Simple Meaning</div>
-                    <div className="explanation-card-body">{activeLine.simple}</div>
-                  </div>
-                )}
-
-                {activeTab === 'LITERARY' && (
-                  <div className="explanation-card">
-                    <div className="explanation-card-header">Literary Analysis & Metaphors</div>
-                    <div className="explanation-card-body">{activeLine.detailed}</div>
-                  </div>
-                )}
-
-                {activeTab === 'GLOSSARY' && (
-                  <div className="explanation-card">
-                    <div className="explanation-card-header">Vocabulary & Glossary</div>
-                    <div className="explanation-card-body">
-                      <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
-                        {activeLine.vocabulary.map((vocab, index) => (
-                          <li key={index} style={{ marginBottom: '8px' }}>
-                            <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
-                          </li>
-                        ))}
-                      </ul>
+                {isYT ? (
+                  /* YouTube track details */
+                  <div
+                    style={{
+                      marginBottom: '18px',
+                      borderBottom: '1px solid var(--color-border)',
+                      paddingBottom: '12px'
+                    }}
+                  >
+                    <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
+                      NOW PLAYING · YT MUSIC
+                    </span>
+                    {nowCover && (
+                      <img
+                        src={nowCover}
+                        alt={nowTitle}
+                        style={{ width: '100%', borderRadius: '4px', margin: '12px 0', display: 'block' }}
+                      />
+                    )}
+                    <div className="explanation-card">
+                      <div className="explanation-card-header">Track</div>
+                      <div className="explanation-card-body">
+                        <strong style={{ color: 'var(--color-highlight)' }}>{nowTitle}</strong>
+                        <br />
+                        {nowArtist}
+                        {ytTrack?.album ? (
+                          <>
+                            <br />
+                            <span className="item-sub-text">Album // {ytTrack.album}</span>
+                          </>
+                        ) : null}
+                      </div>
                     </div>
+                    <p className="item-sub-text" style={{ marginTop: '10px', lineHeight: 1.5 }}>
+                      Streaming via the unofficial YouTube Music API. Lyrics, when available,
+                      appear on the deck to the left.
+                    </p>
                   </div>
+                ) : (
+                  <>
+                    {/* Selected Line Header */}
+                    <div
+                      style={{
+                        marginBottom: '18px',
+                        borderBottom: '1px solid var(--color-border)',
+                        paddingBottom: '12px'
+                      }}
+                    >
+                      <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
+                        ACTIVE COUPLET DETAIL
+                      </span>
+                      <p className="verse-translit" style={{ marginTop: '8px', fontSize: '0.86rem' }}>
+                        "{activeLine.roman}"
+                      </p>
+                    </div>
+
+                    {/* Tab Content Display */}
+                    {activeTab === 'SIMPLE' && (
+                      <div className="explanation-card">
+                        <div className="explanation-card-header">Simple Meaning</div>
+                        <div className="explanation-card-body">{activeLine.simple}</div>
+                      </div>
+                    )}
+
+                    {activeTab === 'LITERARY' && (
+                      <div className="explanation-card">
+                        <div className="explanation-card-header">Literary Analysis & Metaphors</div>
+                        <div className="explanation-card-body">{activeLine.detailed}</div>
+                      </div>
+                    )}
+
+                    {activeTab === 'GLOSSARY' && (
+                      <div className="explanation-card">
+                        <div className="explanation-card-header">Vocabulary & Glossary</div>
+                        <div className="explanation-card-body">
+                          <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
+                            {activeLine.vocabulary.map((vocab, index) => (
+                              <li key={index} style={{ marginBottom: '8px' }}>
+                                <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {/* TTS Control Area */}
@@ -739,10 +1069,16 @@ export function App() {
                     style={{ width: '100%' }}
                   >
                     <Volume2 size={14} />
-                    <span>{isSpeaking ? 'STOP AUDIO DESCRIPTION' : 'NARRATE DESCRIPTION'}</span>
+                    <span>
+                      {isSpeaking
+                        ? 'STOP NARRATION'
+                        : isYT
+                        ? 'NARRATE LYRICS'
+                        : 'NARRATE DESCRIPTION'}
+                    </span>
                   </button>
                   <div className="item-sub-text" style={{ textAlign: 'center', marginTop: '8px' }}>
-                    Reads explanation using browser TTS
+                    {isYT ? 'Reads fetched lyrics using browser TTS' : 'Reads explanation using browser TTS'}
                   </div>
                 </div>
               </div>
@@ -897,6 +1233,107 @@ export function App() {
                 </button>
               </article>
             </div>
+          </div>
+        )}
+
+        {/* View 4: YT Music search + streaming */}
+        {currentView === 'YTMUSIC' && (
+          <div className="catalog-deck">
+            <div>
+              <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
+                YOUTUBE MUSIC · UNOFFICIAL API
+              </span>
+              <h2
+                style={{
+                  fontFamily: 'Space Mono',
+                  fontSize: '1.5rem',
+                  textTransform: 'uppercase',
+                  margin: '8px 0 20px 0',
+                  letterSpacing: '0.02em'
+                }}
+              >
+                Search the World of Ghazals & Qawwalis
+              </h2>
+            </div>
+
+            <form className="catalog-search-row" onSubmit={runYtSearch}>
+              <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+                <Music
+                  size={16}
+                  style={{ position: 'absolute', left: '16px', color: 'var(--color-text-muted)' }}
+                />
+                <input
+                  type="text"
+                  className="console-input"
+                  placeholder="e.g. Mehdi Hassan, Jagjit Singh, Nusrat Fateh Ali Khan..."
+                  value={ytQuery}
+                  onChange={(e) => setYtQuery(e.target.value)}
+                  style={{ paddingLeft: '44px' }}
+                />
+              </div>
+              <button type="submit" className="console-btn console-btn--primary" disabled={ytLoading}>
+                {ytLoading ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
+                <span>{ytLoading ? 'SEARCHING' : 'SEARCH'}</span>
+              </button>
+            </form>
+
+            {ytError && (
+              <div
+                className="explanation-card"
+                style={{ borderColor: 'var(--color-accent)', marginBottom: '20px' }}
+              >
+                <div className="explanation-card-body">{ytError}</div>
+              </div>
+            )}
+
+            {ytResults.length > 0 && (
+              <div className="yt-results-grid">
+                {ytResults.map((track) => (
+                  <div
+                    key={track.videoId}
+                    className={`yt-result-card ${
+                      isYT && ytTrack?.videoId === track.videoId ? 'yt-result-card--active' : ''
+                    }`}
+                    onClick={() => playYtTrack(track)}
+                  >
+                    <div className="yt-result-thumb">
+                      {track.coverUrl ? (
+                        <img src={track.coverUrl} alt={track.title} />
+                      ) : (
+                        <Music size={20} />
+                      )}
+                      <div className="yt-result-play">
+                        <Play size={18} />
+                      </div>
+                    </div>
+                    <div className="yt-result-meta">
+                      <div className="yt-result-title">{track.title}</div>
+                      <div className="item-sub-text">{track.artist}</div>
+                      {track.duration && (
+                        <div className="item-sub-text" style={{ opacity: 0.6 }}>
+                          {track.duration}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!ytLoading && ytResults.length === 0 && !ytError && (
+              <div
+                className="item-sub-text"
+                style={{ textAlign: 'center', padding: '40px', lineHeight: 1.6 }}
+              >
+                Search YouTube Music for any ghazal, qawwali, or artist.
+                <br />
+                Selecting a result loads it onto the Listening Deck — the vinyl spins as it plays.
+                <br />
+                <span style={{ opacity: 0.6 }}>
+                  Requires the local bridge: cd ytmusic-service &amp;&amp; python main.py
+                </span>
+              </div>
+            )}
           </div>
         )}
 

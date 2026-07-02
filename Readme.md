@@ -7,6 +7,29 @@ To create an immersive, voice-assisted web app that helps users understand the p
 
 ---
 
+**Running Locally (3 processes):**
+
+The app now streams from **YouTube Music** via the unofficial [`ytmusicapi`](https://ytmusicapi.readthedocs.io/en/stable/), in addition to the curated archive.org catalog. Start all three from the project root:
+
+```bash
+# 1. YT Music bridge (Python) — search + lyrics
+cd ytmusic-service && python -m venv .venv && .venv\Scripts\activate   # (macOS/Linux: source .venv/bin/activate)
+pip install -r requirements.txt && python main.py                       # -> http://127.0.0.1:8000
+
+# 2. Node API (proxies the bridge at /api/yt/*, serves the curated catalog)
+cd backend && npm install && npm run dev                                # -> http://localhost:5000
+
+# 3. Next.js frontend
+cd frontend && npm install && npm run dev                               # -> http://localhost:3000
+```
+
+Open `http://localhost:3000`, go to **[04] YT Music**, and search any ghazal/qawwali or artist.
+Playback runs through the YouTube IFrame Player API; the vinyl on the Listening Deck spins
+clockwise with real turntable inertia while it plays, and fetched lyrics appear beside it.
+The archive catalog works even if the Python bridge is offline.
+
+---
+
 **Core Features:**
 
 1. **Searchable Library**
