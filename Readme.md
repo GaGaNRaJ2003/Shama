@@ -1,151 +1,202 @@
-**Project Title:** *Shama: The Ghazal & Qawwali Meaning Companion*
+# Shama: The Ghazal & Qawwali Meaning Companion
+
+> *"From the shama to the parwana — guided by meaning."*
+
+An immersive web app that helps users understand the poetic depth of Ghazals and Qawwalis in real-time. Play any song, see synced lyrics scroll by, click any couplet, and get AI-generated literary analysis — all narrated in a warm voice.
 
 ---
 
-**Vision:**
-To create an immersive, voice-assisted web app that helps users understand the poetic and metaphorical depth of Ghazals and Qawwalis in real-time. The platform blends AI, audio, and cultural aesthetics to bridge the gap between the emotional allure of classical music and its intricate linguistic meaning.
+## Demo
 
----
+Play any ghazal from YouTube Music → lyrics auto-sync → click a couplet → AI explains it.
 
-**Running Locally (3 processes):**
-
-The app now streams from **YouTube Music** via the unofficial [`ytmusicapi`](https://ytmusicapi.readthedocs.io/en/stable/), in addition to the curated archive.org catalog. Start all three from the project root:
-
-```bash
-# 1. YT Music bridge (Python) — search + lyrics
-cd ytmusic-service && python -m venv .venv && .venv\Scripts\activate   # (macOS/Linux: source .venv/bin/activate)
-pip install -r requirements.txt && python main.py                       # -> http://127.0.0.1:8000
-
-# 2. Node API (proxies the bridge at /api/yt/*, serves the curated catalog)
-cd backend && npm install && npm run dev                                # -> http://localhost:5000
-
-# 3. Next.js frontend
-cd frontend && npm install && npm run dev                               # -> http://localhost:3000
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  [01] LISTENING DECK    [02] CATALOG    [03] PICKS    [04] YT MUSIC  │
+├──────────┬───────────────────────────────┬───────────────────────────┤
+│ Catalog  │ ▶ Vinyl + Candle Animation    │ AI Meaning Panel          │
+│ 10 Ghaz. │                               │                           │
+│          │ "ranjish hi sahi dil hi        │ SIMPLE: He tells the      │
+│ • Ghalib │  dukhaane ke liye aa"         │ beloved: come for any     │
+│ • Faiz   │                               │ reason, even to hurt me.  │
+│ • Mir    │ ♪ Synced lyrics scrolling...   │                           │
+│ • Faraz  │                               │ LITERARY: "Ranjish hi     │
+│          │ [00:59] رنجش ہی سہی ←active   │ sahi" concedes the quarrel│
+│          │ [01:09] آ فر سے مجھے           │ just to win the visit...  │
+│          │                               │                           │
+│          │ 🔊 NARRATE  ♡ ADD TO CATALOG  │ Mood: Heartbreak & Reunion│
+└──────────┴───────────────────────────────┴───────────────────────────┘
 ```
 
-Open `http://localhost:3000`, go to **[04] YT Music**, and search any ghazal/qawwali or artist.
-Playback runs through the YouTube IFrame Player API; the vinyl on the Listening Deck spins
-clockwise with real turntable inertia while it plays, and fetched lyrics appear beside it.
-The archive catalog works even if the Python bridge is offline.
+---
+
+## Features
+
+| Feature | Status |
+|---------|--------|
+| 🎵 Play any ghazal via YouTube Music | ✅ |
+| 📜 Time-synced lyrics (LRCLIB + YT Music fallback) | ✅ |
+| 🤖 AI-powered couplet meanings (Groq/Gemini) | ✅ |
+| 📖 Literary device identification (tashbih, isti'ara, etc.) | ✅ |
+| 🔊 Voice narration (Edge TTS — natural Hindi/Urdu/English) | ✅ |
+| 🕯️ Immersive UI (vinyl turntable, diya animation, moths) | ✅ |
+| 📚 10 curated ghazals with hand-written meanings | ✅ |
+| ❤️ Personal catalog (add/remove songs, persists locally) | ✅ |
+| 🔍 RAG-enhanced meanings (2000+ couplets in vector DB) | ✅ |
+| 🌐 Multilingual (Urdu, Hindi, Roman, English) | ✅ |
 
 ---
 
-**Core Features:**
+## Architecture
 
-1. **Searchable Library**
-
-   * Curated collection of Ghazals and Qawwalis (sourced from YouTube, Rekhta, etc.).
-   * Metadata: Artist, Era, Language, Source.
-
-2. **Line-by-Line Interaction**
-
-   * Each line or verse is clickable.
-   * Triggers an AI-generated meaning and interpretation.
-
-3. **AI-Powered Meaning Engine**
-
-   * Simple and layered explanations using GPT-style LLMs.
-   * Explains literary devices (takhallus, metaphor, symbolism).
-   * Translations available: Urdu, Hindi, English, Roman Urdu.
-
-4. **Voice Assistant**
-
-   * Text-to-speech feature (emotion-aware TTS like ElevenLabs or Azure).
-   * Narrates explanations in calm, poetic tones.
-   * Toggle between male/female voice.
-
-5. **Aesthetic UI/UX**
-
-   * Dark, night-themed design (diya flickering, night sky background).
-   * Moths fluttering around a symbolic candle (shama-parwana motif).
-   * Urdu calligraphy styling for a soulful experience.
-
-6. **Language Switch**
-
-   * Switch between full Urdu, Hindi, Roman Urdu, and English.
-   * Ideal for bilingual learners and diaspora users.
-
-7. **Mobile Friendly + Accessible**
-
-   * Smooth transitions, pinch-zoom support.
-   * High contrast mode and screen reader compatibility.
+```
+Frontend (Next.js :3000)
+    │
+    ▼ all /api/* calls
+Node Backend (Express :5000)
+    ├── /api/works         → Curated catalog
+    ├── /api/meaning       → proxies to ML Engine
+    ├── /api/tts           → proxies to ML Engine
+    ├── /api/split-lyrics  → proxies to ML Engine
+    └── /api/yt/*          → proxies to YT Music Bridge
+              │                        │
+    ┌─────────▼──────────┐   ┌────────▼──────────┐
+    │ ML Engine (:8001)  │   │ YT Bridge (:8000) │
+    │ FastAPI/Python     │   │ ytmusicapi +       │
+    │ • Groq (Llama 3.3) │   │ LRCLIB lyrics     │
+    │ • Gemini fallback   │   └───────────────────┘
+    │ • Edge TTS          │
+    │ • RAG (pgvector)    │
+    └─────────────────────┘
+              │
+    ┌─────────▼──────────┐
+    │ Supabase (free)    │
+    │ • pgvector (RAG)   │
+    │ • Meaning cache    │
+    │ • TTS audio cache  │
+    └────────────────────┘
+```
 
 ---
 
-**Bonus Features (Phase 2):**
+## Tech Stack
 
-1. **Voice Query Support**
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 15, React 19, Three.js, Framer Motion, Tailwind |
+| Backend | Express.js (API gateway), FastAPI (ML engine) |
+| LLM | Groq (Llama 3.3 70B) → Gemini 2.0 Flash fallback |
+| TTS | Edge TTS (Microsoft neural voices — free, unlimited) |
+| Lyrics | LRCLIB (primary, synced) → YouTube Music (fallback) |
+| Database | Supabase (pgvector for RAG, caching) |
+| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (local CPU) |
+| Scraping | Rekhta.org (2000+ couplets for RAG context) |
 
-   * "What does \*dil-e-nadaan\* mean here?" → spoken response from AI.
-   * Context-aware answers: adjust depth for beginners vs. scholars.
-
-2. **Emotional Recommendation Engine**
-
-   * Suggests ghazals based on current mood/emotion (e.g., heartbreak, longing).
-   * Uses NLP sentiment + emotion analysis.
-
-3. **Favorites & Notes**
-
-   * Save favorite couplets.
-   * Add personal reflections or memories tied to lines.
-
-4. **Annotation Sharing**
-
-   * Create and share your interpretation of a verse.
-   * Social feed to see others’ thoughts (community learning).
-
-5. **Artist Collaboration Mode**
-
-   * Invite poets or singers to do live breakdowns.
-   * Offer patrons or paid exclusive content (e.g., Coke Studio interpretations).
+**Total cost: $0/month** (all free tiers)
 
 ---
 
-**Target Audience:**
+## Running Locally (4 processes)
 
-* Ghazal lovers globally (especially 16–40 age group).
-* Indian/Pakistani diaspora in US, UK, Canada, UAE.
-* Language learners of Urdu/Hindi.
-* Literature and poetry students.
+### Prerequisites
+- Node.js 18+, Python 3.11+, pip
+- Free API keys: [Groq](https://console.groq.com), [Gemini](https://aistudio.google.com/apikey), [Supabase](https://supabase.com)
 
----
+### Setup
 
-**Monetization Ideas:**
+```bash
+# 1. Clone and configure
+git clone https://github.com/GaGaNRaJ2003/Shama.git
+cd Shama
+cp ml-engine/deploy/env.example .env
+# Edit .env with your API keys
 
-* Premium access to exclusive artist interpretations.
-* Patron model (monthly supporters get voice notes + live sessions).
-* Affiliate integration with ghazal concerts/Spotify playlists.
-* Optional ad model (non-intrusive).
+# 2. ML Engine (Python)
+cd ml-engine && python -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+python main.py                                    # → http://127.0.0.1:8001
 
----
+# 3. YT Music Bridge (Python)
+cd ytmusic-service && python -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt
+python main.py                                    # → http://127.0.0.1:8000
 
-**Tech Stack (MVP):**
+# 4. Node Backend
+cd backend && npm install && npm run dev          # → http://localhost:5000
 
-* **Frontend**: React + Tailwind + GSAP (for animations)
-* **Backend**: FastAPI or Node.js
-* **LLM API**: OpenAI GPT-4o or similar
-* **TTS**: ElevenLabs, Azure Cognitive TTS
-* **Database**: Supabase or Firebase
-* **Hosting**: Vercel / Render / Netlify
+# 5. Frontend
+cd frontend && npm install && npm run dev         # → http://localhost:3000
+```
 
----
-
-**Next Steps:**
-
-1. Create a few demo pages using 2–3 iconic ghazals.
-2. Build TTS + GPT integration prototype.
-3. Finalize brand aesthetics (fonts, diya animation, etc.).
-4. Get early feedback from 10–20 users.
-5. Prepare for soft launch with 50+ songs.
+See **[SETUP.md](./SETUP.md)** for detailed step-by-step instructions including Supabase setup.
 
 ---
 
-**Tagline Ideas:**
+## How It Works
 
-* *"Where every couplet finds its voice."*
-* *"Feel. Understand. Belong."*
-* *"From the shama to the parwana — guided by meaning."*
+1. **User plays a song** → YouTube Music IFrame player streams audio
+2. **Lyrics auto-fetch** → LRCLIB provides time-synced lyrics (LRC format); YouTube Music as fallback
+3. **Lyrics scroll in real-time** → Active line highlights and auto-scrolls as song plays
+4. **User clicks a couplet** → Frontend sends `POST /api/meaning` with the couplet text
+5. **RAG retrieval** → Similar couplets from Supabase pgvector enrich the LLM prompt
+6. **LLM generates meaning** → Groq (Llama 3.3 70B) produces translation, simple/detailed meaning, vocabulary, literary devices, mood
+7. **Response cached** → Same couplet never re-generated (instant on repeat)
+8. **Voice narration** → Edge TTS reads the meaning aloud in warm Hindi/Urdu/English
 
 ---
 
-This project celebrates the soul of Indo-Persian poetry with modern AI. It’s more than just a translator — it’s a cultural bridge, an emotional companion, and a poetic mentor.
+## Curated Catalog (10 Ghazals)
+
+| # | Title | Poet | Artist |
+|---|-------|------|--------|
+| 01 | Dil-e-Nadaan Tujhe Hua Kya Hai | Mirza Ghalib | Jagjit & Chitra Singh |
+| 02 | Aaj Jaane Ki Zid Na Karo | Fayyaz Hashmi | Farida Khanum |
+| 03 | Gulon Mein Rang Bhare | Faiz Ahmed Faiz | Mehdi Hassan |
+| 04 | Ranjish Hi Sahi | Ahmed Faraz | Mehdi Hassan |
+| 05 | Chupke Chupke Raat Din | Hasrat Mohani | Ghulam Ali |
+| 06 | Hazaaron Khwahishein Aisi | Mirza Ghalib | Jagjit Singh |
+| 07 | Koi Umeed Bar Nahin Aati | Mirza Ghalib | Mehdi Hassan |
+| 08 | Mujhse Pehli Si Mohabbat | Faiz Ahmed Faiz | Noor Jehan |
+| 09 | Wo Jo Hum Mein Tum Mein Qarar Tha | Faiz Ahmed Faiz | Abida Parveen |
+| 10 | Tujhe Yaad Na Meri Aayi | Mir Taqi Mir | Mehdi Hassan |
+
+Plus **infinite songs** via YT Music search — AI meanings work for all of them.
+
+---
+
+## Project Structure
+
+```
+Shama/
+├── frontend/          # Next.js 15 + React 19
+├── backend/           # Express API gateway (proxies all services)
+├── ml-engine/         # Python ML service (meanings, TTS, RAG)
+│   ├── api/           # /api/meaning, /api/split-lyrics
+│   ├── tts/           # Edge TTS voice narration
+│   ├── rag/           # pgvector embeddings + retrieval
+│   ├── scraper/       # Rekhta.org ghazal scraper
+│   └── deploy/        # Render, Vercel, Docker configs
+├── ytmusic-service/   # YT Music search + LRCLIB synced lyrics
+├── SETUP.md           # Detailed setup guide
+└── .env               # API keys (gitignored)
+```
+
+---
+
+## Contributing
+
+1. Fork the repo
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes
+4. Push to the branch
+5. Open a Pull Request
+
+---
+
+## License
+
+This project is for educational and cultural preservation purposes.
+
+---
+
+*Shama celebrates the soul of Indo-Persian poetry with modern AI. It's more than a translator — it's a cultural bridge, an emotional companion, and a poetic mentor.*
