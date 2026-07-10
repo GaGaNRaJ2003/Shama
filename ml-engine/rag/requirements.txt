@@ -1,0 +1,15 @@
+# Shama RAG — Python dependencies
+# Install: pip install -r requirements.txt
+
+# Supabase Python client
+supabase==2.15.0
+
+# Sentence Transformers (local embedding model, no API cost)
+sentence-transformers==3.3.1
+
+# PyTorch CPU-only (keeps install small, no GPU required)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+
+# Numerical
+numpy>=1.26.0,<2.0.0

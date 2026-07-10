@@ -1,0 +1,24 @@
+# Shama — Poets to scrape from Rekhta.org
+# One poet-slug per line (from URL: rekhta.org/poets/SLUG/ghazals)
+# Run: python scraper/rekhta_scraper.py --poets-file scraper/poets.txt --max-ghazals 20
+
+mirza-ghalib
+faiz-ahmad-faiz
+ahmed-faraz
+mir-taqi-mir
+allama-iqbal
+jaun-elia
+parveen-shakir
+gulzar
+sahir-ludhianvi
+ahmad-mushtaq
+momin-khan-momin
+dagh-dehlvi
+hasrat-mohani
+firaq-gorakhpuri
+wali-dakhani
+ibn-e-insha
+qateel-shifai
+nida-fazli
+bashir-badr
+munir-niazi

@@ -9,7 +9,9 @@ import {
   VolumeX,
   Search,
   Music,
-  Loader2
+  Loader2,
+  Heart,
+  Trash2
 } from 'lucide-react'
 import './App.css'
 import { ShaderBackdrop } from './components/aesthetic/ShaderBackdrop'
@@ -17,6 +19,13 @@ import { LiquidLogoMark } from './components/aesthetic/LiquidLogoMark'
 import { MehfilScene } from './components/aesthetic/MehfilScene'
 import { YouTubePlayer } from './components/YouTubePlayer'
 import { catalog, type WorkData, type LineData } from './data/ghazals'
+import {
+  getUserCatalog,
+  addToCatalog,
+  removeFromCatalog,
+  isInCatalog,
+  type UserCatalogEntry,
+} from './data/userCatalog'
 
 const API_BASE = 'http://localhost:5000'
 
@@ -71,10 +80,40 @@ export function App() {
   const [ytLyrics, setYtLyrics] = useState<{ text: string | null; source: string | null; loading: boolean }>(
     { text: null, source: null, loading: false }
   )
+  const [ytSyncedLines, setYtSyncedLines] = useState<{time_ms: number, text: string}[]>([])
+  const syncedLyricsRef = useRef<HTMLDivElement | null>(null)
+
+  // YT Music structured couplets + AI meaning
+  const [ytCouplets, setYtCouplets] = useState<
+    { index: number; line1: string; line2: string | null; combined_text: string; is_refrain: boolean }[]
+  >([])
+  const [selectedYtLine, setSelectedYtLine] = useState<
+    { index: number; line1: string; line2: string | null; combined_text: string; is_refrain: boolean } | null
+  >(null)
+  const [ytMeaning, setYtMeaning] = useState<{
+    translation: string; simple: string; detailed: string;
+    vocabulary: { term: string; meaning: string }[];
+    literary_devices: { device: string; english_name: string; explanation: string }[];
+    mood: string; cached: boolean;
+  } | null>(null)
+  const [ytMeaningLoading, setYtMeaningLoading] = useState<boolean>(false)
+
+  // User catalog state (persisted in localStorage)
+  const [userCatalogItems, setUserCatalogItems] = useState<UserCatalogEntry[]>(() => getUserCatalog())
 
   // `isYT` == showing the pure YT-Music content panel (lyrics, no couplets).
   const isYT = !!ytTrack
   const isStreaming = playbackSource === 'youtube'
+
+  // AI-generated meanings from the ML engine
+  const [aiMeaning, setAiMeaning] = useState<{
+    translation: string; simple: string; detailed: string;
+    vocabulary: { term: string; meaning: string }[];
+    literary_devices: { device: string; english_name: string; explanation: string }[];
+    mood: string; cached: boolean;
+  } | null>(null)
+  const [aiLoading, setAiLoading] = useState<boolean>(false)
+  const [aiError, setAiError] = useState<string | null>(null)
 
   // Mehfil Mode (couplets synced to the singer) + timestamp authoring.
   const [mehfilSync, setMehfilSync] = useState<boolean>(true)
@@ -88,6 +127,37 @@ export function App() {
     return typeof line.t === 'number' ? line.t : null
   }
   const hasTimestamps = activeWork.lines.some((l) => lineTime(activeWork, l) !== null)
+
+  // Fetch AI-generated meaning when active couplet changes
+  useEffect(() => {
+    if (isYT || !activeLine?.roman) return
+    setAiMeaning(null)
+    setAiError(null)
+    setAiLoading(true)
+
+    const depth = activeTab === 'LITERARY' ? 'detailed' : 'simple'
+    fetch(`${API_BASE}/api/meaning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        couplet: activeLine.roman,
+        poet: activeWork.poet,
+        language: 'roman',
+        depth,
+      }),
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(res.statusText))
+      .then((data) => {
+        setAiMeaning(data)
+        setAiLoading(false)
+      })
+      .catch((err) => {
+        console.warn('AI meaning unavailable:', err)
+        setAiError('AI meaning unavailable')
+        setAiLoading(false)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLine?.id, activeTab])
 
   // The couplet the singer is currently on (last one whose start time has passed).
   const activeSyncLineId = useMemo(() => {
@@ -240,6 +310,46 @@ export function App() {
     }
   }
 
+  // ---- User Catalog (Add to My Catalog) ------------------------------------
+  const toggleCatalogEntry = () => {
+    if (!ytTrack) return
+    if (isInCatalog(ytTrack.videoId)) {
+      // Remove it
+      const entry = userCatalogItems.find((e) => e.videoId === ytTrack.videoId)
+      if (entry) {
+        removeFromCatalog(entry.id)
+        setUserCatalogItems(getUserCatalog())
+      }
+    } else {
+      // Add it
+      addToCatalog({
+        videoId: ytTrack.videoId,
+        title: ytTrack.title,
+        artist: ytTrack.artist,
+        album: ytTrack.album,
+        thumbnail: ytTrack.coverUrl || ytTrack.thumbnail,
+      })
+      setUserCatalogItems(getUserCatalog())
+    }
+  }
+
+  const removeUserCatalogEntry = (id: string) => {
+    removeFromCatalog(id)
+    setUserCatalogItems(getUserCatalog())
+  }
+
+  const playFromUserCatalog = (entry: UserCatalogEntry) => {
+    const track: YtTrack = {
+      videoId: entry.videoId,
+      title: entry.title,
+      artist: entry.artist,
+      album: entry.album,
+      thumbnail: entry.thumbnail,
+      coverUrl: entry.thumbnail,
+    }
+    playYtTrack(track)
+  }
+
   // Resolve a YouTube video for a curated work (cached per work id).
   const ensureCuratedVideo = async (work: WorkData): Promise<string | null> => {
     if (ytVideoId && resolvedWorkRef.current === work.id) return ytVideoId
@@ -326,15 +436,97 @@ export function App() {
       })
   }
 
-  const fetchYtLyrics = (videoId: string) => {
+  const fetchYtLyrics = (videoId: string, title?: string, artist?: string) => {
     setYtLyrics({ text: null, source: null, loading: true })
-    fetch(`${API_BASE}/api/yt/lyrics/${videoId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        setYtLyrics({ text: data.lyrics || null, source: data.source || null, loading: false })
-      })
-      .catch(() => setYtLyrics({ text: null, source: null, loading: false }))
+    setYtSyncedLines([])
+
+    const fallbackToYouTube = () => {
+      fetch(`${API_BASE}/api/yt/lyrics/${videoId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          setYtLyrics({ text: data.lyrics || null, source: data.source || null, loading: false })
+        })
+        .catch(() => setYtLyrics({ text: null, source: null, loading: false }))
+    }
+
+    if (title || artist) {
+      const params = new URLSearchParams()
+      if (title) params.set('title', title)
+      if (artist) params.set('artist', artist)
+
+      fetch(`${API_BASE}/api/yt/lyrics/search?${params.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.hasLyrics) {
+            setYtLyrics({ text: data.lyrics || null, source: data.source || 'lrclib', loading: false })
+            setYtSyncedLines(data.syncedLines || [])
+          } else {
+            fallbackToYouTube()
+          }
+        })
+        .catch(() => {
+          fallbackToYouTube()
+        })
+    } else {
+      fallbackToYouTube()
+    }
   }
+
+  // When ytLyrics.text is fetched, split into structured couplets.
+  useEffect(() => {
+    if (!ytLyrics.text) {
+      setYtCouplets([])
+      setSelectedYtLine(null)
+      setYtMeaning(null)
+      return
+    }
+    fetch(`${API_BASE}/api/split-lyrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        lyrics_text: ytLyrics.text,
+        title: ytTrack?.title || '',
+        artist: ytTrack?.artist || '',
+      }),
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(res.statusText))
+      .then((data) => {
+        setYtCouplets(data.couplets || [])
+      })
+      .catch((err) => {
+        console.warn('split-lyrics unavailable, falling back to raw lines:', err)
+        setYtCouplets([])
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ytLyrics.text])
+
+  // Fetch AI meaning when a YT couplet is selected or tab changes.
+  useEffect(() => {
+    if (!selectedYtLine) return
+    setYtMeaning(null)
+    setYtMeaningLoading(true)
+    const depth = activeTab === 'LITERARY' ? 'detailed' : 'simple'
+    fetch(`${API_BASE}/api/meaning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        couplet: selectedYtLine.combined_text,
+        poet: ytTrack?.artist || '',
+        language: 'roman',
+        depth,
+      }),
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(res.statusText))
+      .then((data) => {
+        setYtMeaning(data)
+        setYtMeaningLoading(false)
+      })
+      .catch((err) => {
+        console.warn('AI meaning unavailable for YT couplet:', err)
+        setYtMeaningLoading(false)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedYtLine?.index, activeTab])
 
   const playYtTrack = (track: YtTrack) => {
     // Stop the archive audio engine and hand playback to YouTube.
@@ -349,7 +541,10 @@ export function App() {
     setPlaybackProgress(0)
     setIsPlaying(true)
     setCurrentView('LISTENING')
-    fetchYtLyrics(track.videoId)
+    fetchYtLyrics(track.videoId, track.title, track.artist)
+    setSelectedYtLine(null)
+    setYtMeaning(null)
+    setYtCouplets([])
     if (isSpeaking) {
       window.speechSynthesis.cancel()
       setIsSpeaking(false)
@@ -409,29 +604,66 @@ export function App() {
     }
   }
 
-  const toggleSpeech = () => {
+  const toggleSpeech = async () => {
     if (isSpeaking) {
+      // Stop any playing audio
       window.speechSynthesis.cancel()
+      const ttsAudio = document.getElementById('shama-tts-audio') as HTMLAudioElement | null
+      if (ttsAudio) { ttsAudio.pause(); ttsAudio.currentTime = 0 }
       setIsSpeaking(false)
       return
     }
 
     const textToSpeak = isYT
-      ? ytLyrics.text || `Now playing ${ytTrack?.title} by ${ytTrack?.artist} from YouTube Music.`
+      ? (selectedYtLine
+          ? (activeTab === 'SIMPLE' ? (ytMeaning?.simple || selectedYtLine.combined_text)
+             : activeTab === 'LITERARY' ? (ytMeaning?.detailed || selectedYtLine.combined_text)
+             : (ytMeaning?.vocabulary || []).map((v) => `${v.term} means ${v.meaning}`).join('. ') || selectedYtLine.combined_text)
+          : ytLyrics.text || `Now playing ${ytTrack?.title} by ${ytTrack?.artist} from YouTube Music.`)
       : activeTab === 'SIMPLE'
-        ? activeLine.simple
+        ? (aiMeaning?.simple || activeLine.simple)
         : activeTab === 'LITERARY'
-        ? activeLine.detailed
-        : activeLine.vocabulary.map((v) => `${v.term} means ${v.meaning}`).join('. ')
+        ? (aiMeaning?.detailed || activeLine.detailed)
+        : (aiMeaning?.vocabulary || activeLine.vocabulary).map((v) => `${v.term} means ${v.meaning}`).join('. ')
 
+    setIsSpeaking(true)
+
+    try {
+      // Try ElevenLabs via our backend
+      const res = await fetch(`${API_BASE}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: textToSpeak, voice: 'male', language: 'en' }),
+      })
+      const data = await res.json()
+
+      if (res.ok && data.audio_url && !data.use_browser_tts) {
+        // Play ElevenLabs audio
+        let ttsAudio = document.getElementById('shama-tts-audio') as HTMLAudioElement | null
+        if (!ttsAudio) {
+          ttsAudio = document.createElement('audio')
+          ttsAudio.id = 'shama-tts-audio'
+          document.body.appendChild(ttsAudio)
+        }
+        ttsAudio.src = data.audio_url
+        ttsAudio.onended = () => setIsSpeaking(false)
+        ttsAudio.onerror = () => { setIsSpeaking(false) }
+        await ttsAudio.play()
+        return
+      }
+    } catch (e) {
+      // ElevenLabs unavailable, fall through to browser TTS
+      console.warn('ElevenLabs TTS unavailable, using browser fallback:', e)
+    }
+
+    // Fallback: browser speech synthesis
     if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(textToSpeak)
       utterance.rate = 0.9
       utterance.onend = () => setIsSpeaking(false)
-      setIsSpeaking(true)
       window.speechSynthesis.speak(utterance)
     } else {
-      alert('Text-to-speech is not supported in this browser.')
+      setIsSpeaking(false)
     }
   }
 
@@ -494,7 +726,7 @@ export function App() {
       {/* Archive.org audio engine (fallback for curated catalog) */}
       <audio
         ref={audioRef}
-        src={activeWork.audioUrl}
+        src={activeWork.audioUrl || undefined}
         preload="none"
         onTimeUpdate={() => {
           if (audioRef.current && playbackSource === 'archive') {
@@ -583,6 +815,21 @@ export function App() {
                 onClick={() => setCurrentView('FEATURED')}
               >
                 [03] Curator Picks
+                {userCatalogItems.length > 0 && (
+                  <span
+                    style={{
+                      marginLeft: '6px',
+                      background: 'var(--color-accent)',
+                      color: '#1a1410',
+                      borderRadius: '8px',
+                      padding: '1px 6px',
+                      fontSize: '0.62rem',
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    {userCatalogItems.length}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -668,6 +915,32 @@ export function App() {
                     <div className="playback-note">{playbackNote}</div>
                   )}
                 </div>
+                {/* Add to My Catalog heart button — only for YT tracks */}
+                {isYT && ytTrack && (
+                  <button
+                    type="button"
+                    className="console-btn"
+                    onClick={toggleCatalogEntry}
+                    title={isInCatalog(ytTrack.videoId) ? 'Remove from My Catalog' : 'Add to My Catalog'}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      color: isInCatalog(ytTrack.videoId) ? '#e57373' : 'var(--color-text-muted)',
+                      borderColor: isInCatalog(ytTrack.videoId) ? '#e57373' : undefined,
+                    }}
+                  >
+                    <Heart
+                      size={16}
+                      fill={isInCatalog(ytTrack.videoId) ? '#e57373' : 'none'}
+                      stroke={isInCatalog(ytTrack.videoId) ? '#e57373' : 'currentColor'}
+                    />
+                    <span style={{ fontSize: '0.7rem' }}>
+                      {isInCatalog(ytTrack.videoId) ? 'IN CATALOG' : 'ADD TO CATALOG'}
+                    </span>
+                  </button>
+                )}
               </div>
 
               {/* Hardware-like Audio Player Deck */}
@@ -905,17 +1178,66 @@ export function App() {
                       <span className="item-sub-text">SOURCE // {ytLyrics.source}</span>
                     )}
                   </div>
-                  <div className="yt-lyrics-body">
+                  <div className="yt-lyrics-body" ref={syncedLyricsRef}>
                     {ytLyrics.loading ? (
                       <div className="yt-lyrics-empty">
                         <Loader2 size={16} className="spin" /> Fetching lyrics…
                       </div>
+                    ) : ytSyncedLines.length > 0 ? (
+                      ytSyncedLines.map((line, i) => {
+                        const currentMs = currentTime * 1000
+                        const isActive = line.time_ms <= currentMs && (i === ytSyncedLines.length - 1 || ytSyncedLines[i + 1].time_ms > currentMs)
+                        return (
+                          <p
+                            key={i}
+                            className={`yt-lyric-line ${isActive ? 'yt-lyric-line--active' : ''}`}
+                            ref={(el) => {
+                              if (isActive && el) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                              }
+                            }}
+                          >
+                            {line.text.trim() === '' ? '\u00A0' : line.text}
+                          </p>
+                        )
+                      })
                     ) : ytLyrics.text ? (
-                      ytLyrics.text.split('\n').map((line, i) => (
-                        <p key={i} className="yt-lyric-line">
-                          {line.trim() === '' ? ' ' : line}
-                        </p>
-                      ))
+                      ytCouplets.length > 0 ? (
+                        ytCouplets.map((couplet) => (
+                          <div
+                            key={couplet.index}
+                            className={`yt-couplet-block ${selectedYtLine?.index === couplet.index ? 'yt-couplet-block--active' : ''} ${couplet.is_refrain ? 'yt-couplet-block--refrain' : ''}`}
+                            onClick={() => setSelectedYtLine(couplet)}
+                            style={{
+                              padding: '10px 14px',
+                              margin: '4px 0',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              border: selectedYtLine?.index === couplet.index ? '1px solid var(--color-accent)' : '1px solid transparent',
+                              background: selectedYtLine?.index === couplet.index ? 'rgba(var(--color-accent-rgb, 255,183,77), 0.08)' : 'transparent',
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            <p className="yt-lyric-line" style={{ margin: '2px 0', opacity: couplet.is_refrain ? 0.7 : 1 }}>
+                              {couplet.line1}
+                            </p>
+                            {couplet.line2 && (
+                              <p className="yt-lyric-line" style={{ margin: '2px 0', opacity: couplet.is_refrain ? 0.7 : 1 }}>
+                                {couplet.line2}
+                              </p>
+                            )}
+                            {couplet.is_refrain && (
+                              <span className="mono-tag" style={{ fontSize: '0.55rem', opacity: 0.6 }}>MUKARRAR</span>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        ytLyrics.text.split('\n').map((line, i) => (
+                          <p key={i} className="yt-lyric-line">
+                            {line.trim() === '' ? '\u00A0' : line}
+                          </p>
+                        ))
+                      )
                     ) : (
                       <div className="yt-lyrics-empty">
                         No synced lyrics available for this track on YouTube Music.
@@ -936,7 +1258,7 @@ export function App() {
               </div>
 
               {/* Tab Deck */}
-              {!isYT && (
+              {(!isYT || selectedYtLine) && (
                 <div className="tab-deck">
                   <button
                     type="button"
@@ -967,43 +1289,126 @@ export function App() {
 
               <div className="panel-content">
                 {isYT ? (
-                  /* YouTube track details */
-                  <div
-                    style={{
-                      marginBottom: '18px',
-                      borderBottom: '1px solid var(--color-border)',
-                      paddingBottom: '12px'
-                    }}
-                  >
-                    <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
-                      NOW PLAYING · YT MUSIC
-                    </span>
-                    {nowCover && (
-                      <img
-                        src={nowCover}
-                        alt={nowTitle}
-                        style={{ width: '100%', borderRadius: '4px', margin: '12px 0', display: 'block' }}
-                      />
-                    )}
-                    <div className="explanation-card">
-                      <div className="explanation-card-header">Track</div>
-                      <div className="explanation-card-body">
-                        <strong style={{ color: 'var(--color-highlight)' }}>{nowTitle}</strong>
-                        <br />
-                        {nowArtist}
-                        {ytTrack?.album ? (
-                          <>
-                            <br />
-                            <span className="item-sub-text">Album // {ytTrack.album}</span>
-                          </>
-                        ) : null}
+                  /* YouTube track details + AI meaning */
+                  <>
+                    <div
+                      style={{
+                        marginBottom: '12px',
+                        borderBottom: '1px solid var(--color-border)',
+                        paddingBottom: '10px'
+                      }}
+                    >
+                      <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
+                        NOW PLAYING · YT MUSIC
+                      </span>
+                      <div className="explanation-card" style={{ marginTop: '8px' }}>
+                        <div className="explanation-card-header">Track</div>
+                        <div className="explanation-card-body">
+                          <strong style={{ color: 'var(--color-highlight)' }}>{nowTitle}</strong>
+                          {' — '}{nowArtist}
+                          {ytTrack?.album && <span className="item-sub-text"> · {ytTrack.album}</span>}
+                        </div>
                       </div>
                     </div>
-                    <p className="item-sub-text" style={{ marginTop: '10px', lineHeight: 1.5 }}>
-                      Streaming via the unofficial YouTube Music API. Lyrics, when available,
-                      appear on the deck to the left.
-                    </p>
-                  </div>
+
+                    {selectedYtLine ? (
+                      <>
+                        <div style={{ marginBottom: '14px', borderBottom: '1px solid var(--color-border)', paddingBottom: '10px' }}>
+                          <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>ACTIVE COUPLET</span>
+                          <p className="verse-translit" style={{ marginTop: '8px', fontSize: '0.86rem' }}>
+                            "{selectedYtLine.combined_text}"
+                          </p>
+                          {ytMeaning?.translation && (
+                            <p className="item-sub-text" style={{ marginTop: '6px', fontStyle: 'italic', lineHeight: 1.5 }}>
+                              {ytMeaning.translation}
+                            </p>
+                          )}
+                        </div>
+
+                        {activeTab === 'SIMPLE' && (
+                          <div className="explanation-card">
+                            <div className="explanation-card-header">Simple Meaning</div>
+                            <div className="explanation-card-body">
+                              {ytMeaningLoading ? (
+                                <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <Loader2 size={14} className="spin" /> Generating meaning...
+                                </span>
+                              ) : ytMeaning?.simple ? (
+                                <>
+                                  {ytMeaning.simple}
+                                  {ytMeaning.mood && (
+                                    <div className="item-sub-text" style={{ marginTop: '10px' }}>
+                                      Mood: <strong style={{ color: 'var(--color-highlight)' }}>{ytMeaning.mood}</strong>
+                                      {ytMeaning.cached && ' · cached'}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <span style={{ color: 'var(--color-muted)' }}>Select a couplet to see its meaning.</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {activeTab === 'LITERARY' && (
+                          <div className="explanation-card">
+                            <div className="explanation-card-header">Literary Analysis & Metaphors</div>
+                            <div className="explanation-card-body">
+                              {ytMeaningLoading ? (
+                                <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <Loader2 size={14} className="spin" /> Generating analysis...
+                                </span>
+                              ) : ytMeaning?.detailed ? (
+                                <>
+                                  {ytMeaning.detailed}
+                                  {ytMeaning.literary_devices && ytMeaning.literary_devices.length > 0 && (
+                                    <ul style={{ margin: '12px 0 0', paddingLeft: '14px', listStyleType: 'square' }}>
+                                      {ytMeaning.literary_devices.map((d, i) => (
+                                        <li key={i} style={{ marginBottom: '6px' }}>
+                                          <strong style={{ color: 'var(--color-highlight)' }}>{d.device}</strong>
+                                          {d.english_name && ` (${d.english_name})`}: {d.explanation}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </>
+                              ) : (
+                                <span style={{ color: 'var(--color-muted)' }}>Select a couplet to see literary analysis.</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {activeTab === 'GLOSSARY' && (
+                          <div className="explanation-card">
+                            <div className="explanation-card-header">Vocabulary & Glossary</div>
+                            <div className="explanation-card-body">
+                              {ytMeaningLoading ? (
+                                <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <Loader2 size={14} className="spin" /> Loading vocabulary...
+                                </span>
+                              ) : ytMeaning?.vocabulary && ytMeaning.vocabulary.length > 0 ? (
+                                <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
+                                  {ytMeaning.vocabulary.map((vocab, index) => (
+                                    <li key={index} style={{ marginBottom: '8px' }}>
+                                      <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <span style={{ color: 'var(--color-muted)' }}>Select a couplet to see vocabulary.</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="item-sub-text" style={{ marginTop: '10px', lineHeight: 1.5 }}>
+                        Click a couplet on the lyrics deck to see its AI-generated meaning,
+                        literary devices, and vocabulary.
+                      </p>
+                    )}
+                  </>
                 ) : (
                   <>
                     {/* Selected Line Header */}
@@ -1020,20 +1425,65 @@ export function App() {
                       <p className="verse-translit" style={{ marginTop: '8px', fontSize: '0.86rem' }}>
                         "{activeLine.roman}"
                       </p>
+                      {aiMeaning?.translation && (
+                        <p className="item-sub-text" style={{ marginTop: '6px', fontStyle: 'italic', lineHeight: 1.5 }}>
+                          {aiMeaning.translation}
+                        </p>
+                      )}
                     </div>
 
                     {/* Tab Content Display */}
                     {activeTab === 'SIMPLE' && (
                       <div className="explanation-card">
                         <div className="explanation-card-header">Simple Meaning</div>
-                        <div className="explanation-card-body">{activeLine.simple}</div>
+                        <div className="explanation-card-body">
+                          {aiLoading ? (
+                            <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Loader2 size={14} className="spin" /> Generating meaning...
+                            </span>
+                          ) : aiMeaning?.simple ? (
+                            <>
+                              {aiMeaning.simple}
+                              {aiMeaning.mood && (
+                                <div className="item-sub-text" style={{ marginTop: '10px' }}>
+                                  Mood: <strong style={{ color: 'var(--color-highlight)' }}>{aiMeaning.mood}</strong>
+                                  {aiMeaning.cached && ' · cached'}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            activeLine.simple
+                          )}
+                        </div>
                       </div>
                     )}
 
                     {activeTab === 'LITERARY' && (
                       <div className="explanation-card">
                         <div className="explanation-card-header">Literary Analysis & Metaphors</div>
-                        <div className="explanation-card-body">{activeLine.detailed}</div>
+                        <div className="explanation-card-body">
+                          {aiLoading ? (
+                            <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Loader2 size={14} className="spin" /> Generating analysis...
+                            </span>
+                          ) : aiMeaning?.detailed ? (
+                            <>
+                              {aiMeaning.detailed}
+                              {aiMeaning.literary_devices && aiMeaning.literary_devices.length > 0 && (
+                                <ul style={{ margin: '12px 0 0', paddingLeft: '14px', listStyleType: 'square' }}>
+                                  {aiMeaning.literary_devices.map((d, i) => (
+                                    <li key={i} style={{ marginBottom: '6px' }}>
+                                      <strong style={{ color: 'var(--color-highlight)' }}>{d.device}</strong>
+                                      {d.english_name && ` (${d.english_name})`}: {d.explanation}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </>
+                          ) : (
+                            activeLine.detailed
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -1041,13 +1491,22 @@ export function App() {
                       <div className="explanation-card">
                         <div className="explanation-card-header">Vocabulary & Glossary</div>
                         <div className="explanation-card-body">
-                          <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
-                            {activeLine.vocabulary.map((vocab, index) => (
-                              <li key={index} style={{ marginBottom: '8px' }}>
-                                <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
-                              </li>
-                            ))}
-                          </ul>
+                          {aiLoading ? (
+                            <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Loader2 size={14} className="spin" /> Loading vocabulary...
+                            </span>
+                          ) : (
+                            <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
+                              {(aiMeaning?.vocabulary && aiMeaning.vocabulary.length > 0
+                                ? aiMeaning.vocabulary
+                                : activeLine.vocabulary
+                              ).map((vocab, index) => (
+                                <li key={index} style={{ marginBottom: '8px' }}>
+                                  <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1073,12 +1532,12 @@ export function App() {
                       {isSpeaking
                         ? 'STOP NARRATION'
                         : isYT
-                        ? 'NARRATE LYRICS'
+                        ? (selectedYtLine ? 'NARRATE MEANING' : 'NARRATE LYRICS')
                         : 'NARRATE DESCRIPTION'}
                     </span>
                   </button>
                   <div className="item-sub-text" style={{ textAlign: 'center', marginTop: '8px' }}>
-                    {isYT ? 'Reads fetched lyrics using browser TTS' : 'Reads explanation using browser TTS'}
+                    {isYT ? 'Reads fetched lyrics aloud' : 'AI-powered voice narration'}
                   </div>
                 </div>
               </div>
@@ -1161,17 +1620,123 @@ export function App() {
           </div>
         )}
 
-        {/* View 3: Curatorpicks featured highlights */}
+        {/* View 3: User's Personal Catalog + Curator picks */}
         {currentView === 'FEATURED' && (
           <div className="featured-deck">
-            <div>
+            {/* User's Personal Catalog Section */}
+            <div style={{ marginBottom: '32px' }}>
+              <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
+                MY CATALOG · SAVED FROM YT MUSIC
+              </span>
+              <h2
+                style={{
+                  fontFamily: 'Space Mono',
+                  fontSize: '1.5rem',
+                  textTransform: 'uppercase',
+                  margin: '8px 0 20px 0',
+                  letterSpacing: '0.02em'
+                }}
+              >
+                Your Personal Collection
+              </h2>
+
+              {userCatalogItems.length === 0 ? (
+                <div
+                  className="explanation-card"
+                  style={{ textAlign: 'center', padding: '40px 20px' }}
+                >
+                  <div className="explanation-card-body" style={{ color: 'var(--color-text-muted)' }}>
+                    <Heart size={32} style={{ marginBottom: '12px', opacity: 0.4 }} />
+                    <p style={{ margin: '8px 0', fontSize: '0.88rem' }}>
+                      Your catalog is empty. Search on{' '}
+                      <button
+                        type="button"
+                        onClick={() => setCurrentView('YTMUSIC')}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--color-accent)',
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          font: 'inherit',
+                        }}
+                      >
+                        [04] YT Music
+                      </button>{' '}
+                      and hit the ❤️ button while a ghazal plays to save it here.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="yt-results-grid">
+                  {userCatalogItems.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className={`yt-result-card ${
+                        isYT && ytTrack?.videoId === entry.videoId ? 'yt-result-card--active' : ''
+                      }`}
+                      onClick={() => playFromUserCatalog(entry)}
+                      style={{ position: 'relative' }}
+                    >
+                      <div className="yt-result-thumb">
+                        {entry.thumbnail ? (
+                          <img src={entry.thumbnail} alt={entry.title} />
+                        ) : (
+                          <Music size={20} />
+                        )}
+                        <div className="yt-result-play">
+                          <Play size={18} />
+                        </div>
+                      </div>
+                      <div className="yt-result-meta">
+                        <div className="yt-result-title">{entry.title}</div>
+                        <div className="item-sub-text">{entry.artist}</div>
+                        {entry.album && (
+                          <div className="item-sub-text" style={{ opacity: 0.6 }}>
+                            {entry.album}
+                          </div>
+                        )}
+                      </div>
+                      {/* Remove button */}
+                      <button
+                        type="button"
+                        title="Remove from catalog"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          removeUserCatalogEntry(entry.id)
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '8px',
+                          right: '8px',
+                          background: 'rgba(0,0,0,0.7)',
+                          border: '1px solid rgba(229,115,115,0.4)',
+                          borderRadius: '4px',
+                          padding: '4px',
+                          cursor: 'pointer',
+                          color: '#e57373',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Original Curator Picks */}
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '28px' }}>
               <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
                 CURATORIAL ANNOTATION DESK
               </span>
               <h2
                 style={{
                   fontFamily: 'Space Mono',
-                  fontSize: '1.6rem',
+                  fontSize: '1.4rem',
                   textTransform: 'uppercase',
                   margin: '8px 0 24px 0',
                   letterSpacing: '0.02em'
@@ -1179,59 +1744,59 @@ export function App() {
               >
                 Ghazal Highlights of the Curation Cycle
               </h2>
-            </div>
 
-            <div className="featured-grid">
-              {/* Card 1: Ghazal of the Day */}
-              <article className="featured-card">
-                <span className="featured-label">[Ghazal of the Day]</span>
-                <h3 className="featured-card-title">Dil-e-Nadaan Tujhe</h3>
-                <div className="featured-card-meta">Poet: Mirza Ghalib // Singer: Jagjit Singh</div>
-                <p className="featured-card-desc">
-                  Mirza Ghalib's timeless inquiry into the naive heart's desires. This rendition by Jagjit & Chitra Singh represents a watershed moment in classical ghazal composition, featuring smooth, minimal acoustic strings and clear, emotional vocal delivery that brings Ghalib's wordplay to life.
-                </p>
-                <button
-                  type="button"
-                  className="console-btn console-btn--primary"
-                  onClick={() => activateCuratorSelection('01')}
-                >
-                  [▶ PLAY SELECTION]
-                </button>
-              </article>
+              <div className="featured-grid">
+                {/* Card 1: Ghazal of the Day */}
+                <article className="featured-card">
+                  <span className="featured-label">[Ghazal of the Day]</span>
+                  <h3 className="featured-card-title">Dil-e-Nadaan Tujhe</h3>
+                  <div className="featured-card-meta">Poet: Mirza Ghalib // Singer: Jagjit Singh</div>
+                  <p className="featured-card-desc">
+                    Mirza Ghalib's timeless inquiry into the naive heart's desires. This rendition by Jagjit & Chitra Singh represents a watershed moment in classical ghazal composition, featuring smooth, minimal acoustic strings and clear, emotional vocal delivery that brings Ghalib's wordplay to life.
+                  </p>
+                  <button
+                    type="button"
+                    className="console-btn console-btn--primary"
+                    onClick={() => activateCuratorSelection('01')}
+                  >
+                    [▶ PLAY SELECTION]
+                  </button>
+                </article>
 
-              {/* Card 2: Ghazal of the Week */}
-              <article className="featured-card">
-                <span className="featured-label">[Ghazal of the Week]</span>
-                <h3 className="featured-card-title">Aaj Jaane Ki Zid Na Karo</h3>
-                <div className="featured-card-meta">Poet: Fayyaz Hashmi // Singer: Farida Khanum</div>
-                <p className="featured-card-desc">
-                  An iconic song of separation and persistent love. Farida Khanum's legendary rendition captures the sheer longing of the beloved. Her performance shows how classical music uses repetition and vocal modulations to express romantic devotion.
-                </p>
-                <button
-                  type="button"
-                  className="console-btn console-btn--primary"
-                  onClick={() => activateCuratorSelection('02')}
-                >
-                  [▶ PLAY SELECTION]
-                </button>
-              </article>
+                {/* Card 2: Ghazal of the Week */}
+                <article className="featured-card">
+                  <span className="featured-label">[Ghazal of the Week]</span>
+                  <h3 className="featured-card-title">Aaj Jaane Ki Zid Na Karo</h3>
+                  <div className="featured-card-meta">Poet: Fayyaz Hashmi // Singer: Farida Khanum</div>
+                  <p className="featured-card-desc">
+                    An iconic song of separation and persistent love. Farida Khanum's legendary rendition captures the sheer longing of the beloved. Her performance shows how classical music uses repetition and vocal modulations to express romantic devotion.
+                  </p>
+                  <button
+                    type="button"
+                    className="console-btn console-btn--primary"
+                    onClick={() => activateCuratorSelection('02')}
+                  >
+                    [▶ PLAY SELECTION]
+                  </button>
+                </article>
 
-              {/* Card 3: Ghazal of the Month */}
-              <article className="featured-card">
-                <span className="featured-label">[Ghazal of the Month]</span>
-                <h3 className="featured-card-title">Gulon Mein Rang Bhare</h3>
-                <div className="featured-card-meta">Poet: Faiz Ahmed Faiz // Singer: Mehdi Hassan</div>
-                <p className="featured-card-desc">
-                  Penned in prison, Faiz's verses blend the traditional flower-garden romantic motifs with a subtle revolutionary cry for spring. Sung by the king of ghazal Mehdi Hassan, this recording remains a masterclass in classic raag composition.
-                </p>
-                <button
-                  type="button"
-                  className="console-btn console-btn--primary"
-                  onClick={() => activateCuratorSelection('03')}
-                >
-                  [▶ PLAY SELECTION]
-                </button>
-              </article>
+                {/* Card 3: Ghazal of the Month */}
+                <article className="featured-card">
+                  <span className="featured-label">[Ghazal of the Month]</span>
+                  <h3 className="featured-card-title">Gulon Mein Rang Bhare</h3>
+                  <div className="featured-card-meta">Poet: Faiz Ahmed Faiz // Singer: Mehdi Hassan</div>
+                  <p className="featured-card-desc">
+                    Penned in prison, Faiz's verses blend the traditional flower-garden romantic motifs with a subtle revolutionary cry for spring. Sung by the king of ghazal Mehdi Hassan, this recording remains a masterclass in classic raag composition.
+                  </p>
+                  <button
+                    type="button"
+                    className="console-btn console-btn--primary"
+                    onClick={() => activateCuratorSelection('03')}
+                  >
+                    [▶ PLAY SELECTION]
+                  </button>
+                </article>
+              </div>
             </div>
           </div>
         )}

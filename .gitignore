@@ -39,3 +39,18 @@ out/
 *.njsproj
 *.sln
 *.sw?
+
+# Temp test files
+_test_*
+_lrc*
+
+# Python virtual environments
+.venv/
+**/.venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+
+# Build info
+*.tsbuildinfo

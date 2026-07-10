@@ -11,6 +11,9 @@ const PORT = process.env.PORT || 5000
 // Location of the Python `ytmusicapi` bridge service (see /ytmusic-service).
 const YT_SERVICE_URL = (process.env.YT_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
 
+// Location of the ML Engine (meaning + TTS) service (see /ml-engine).
+const ML_ENGINE_URL = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8001').replace(/\/$/, '')
+
 app.use(cors())
 app.use(express.json())
 
@@ -219,6 +222,74 @@ app.get('/api/works/:id', async (req, res) => {
 })
 
 // ---------------------------------------------------------------------------
+// ML Engine bridge (proxies the Python ML service in /ml-engine)
+// Provides AI-powered meaning interpretation and TTS narration.
+// ---------------------------------------------------------------------------
+
+const mlUnavailable = (res: express.Response, err: any) => {
+  console.error('[ML_BRIDGE] Upstream error:', err?.message || err)
+  return res.status(503).json({
+    error: 'ML Engine unavailable. Start it with: cd ml-engine && python main.py',
+  })
+}
+
+// POST /api/meaning — Couplet interpretation
+app.post('/api/meaning', async (req, res) => {
+  try {
+    const upstream = await fetch(`${ML_ENGINE_URL}/api/meaning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    })
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return mlUnavailable(res, err)
+  }
+})
+
+// POST /api/tts — Text-to-speech narration
+app.post('/api/tts', async (req, res) => {
+  try {
+    const upstream = await fetch(`${ML_ENGINE_URL}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    })
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return mlUnavailable(res, err)
+  }
+})
+
+// POST /api/split-lyrics — Intelligent lyrics couplet segmentation
+app.post('/api/split-lyrics', async (req, res) => {
+  try {
+    const upstream = await fetch(`${ML_ENGINE_URL}/api/split-lyrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    })
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return mlUnavailable(res, err)
+  }
+})
+
+// GET /api/ml/health — ML Engine health check
+app.get('/api/ml/health', async (req, res) => {
+  try {
+    const upstream = await fetch(`${ML_ENGINE_URL}/health`)
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return mlUnavailable(res, err)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // YT Music bridge (proxies the Python `ytmusicapi` service in /ytmusic-service)
 // Keeping these behind the Express origin means the frontend only talks to one
 // host and thumbnails come back CORS-clean for use as WebGL textures.
@@ -240,6 +311,27 @@ app.get('/api/yt/search', async (req, res) => {
   try {
     const upstream = await fetch(
       `${YT_SERVICE_URL}/search?q=${encodeURIComponent(q)}&limit=${limit}`
+    )
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return ytUnavailable(res, err)
+  }
+})
+
+// GET /api/yt/lyrics/search?title=...&artist=... (LRCLIB synced lyrics)
+app.get('/api/yt/lyrics/search', async (req, res) => {
+  const title = String(req.query.title || '').trim()
+  const artist = String(req.query.artist || '').trim()
+  if (!title && !artist) {
+    return res.status(400).json({ error: 'Provide at least title or artist.', hasLyrics: false })
+  }
+  try {
+    const params = new URLSearchParams()
+    if (title) params.set('title', title)
+    if (artist) params.set('artist', artist)
+    const upstream = await fetch(
+      `${YT_SERVICE_URL}/lyrics/search?${params.toString()}`
     )
     const data = await upstream.json()
     return res.status(upstream.status).json(data)
@@ -288,4 +380,5 @@ app.get('/api/yt/thumb', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[SHAMA_API] Server listening at http://localhost:${PORT}`)
   console.log(`[SHAMA_API] YT Music bridge -> ${YT_SERVICE_URL}`)
+  console.log(`[SHAMA_API] ML Engine bridge -> ${ML_ENGINE_URL}`)
 })

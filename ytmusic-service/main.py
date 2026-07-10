@@ -17,9 +17,11 @@ Run:  uvicorn main:app --port 8000   (or: python main.py)
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from typing import Any, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from ytmusicapi import YTMusic
@@ -97,6 +99,79 @@ def search(
     # ytmusicapi treats `limit` as a floor (it paginates past it), so slice hard.
     results = [song for item in raw if (song := _normalize_song(item))][:limit]
     return {"query": q, "count": len(results), "results": results}
+
+
+# ---------------------------------------------------------------------------
+# LRCLIB — free synced lyrics provider (https://lrclib.net)
+# MUST be defined before /lyrics/{video_id} to avoid route conflict
+# ---------------------------------------------------------------------------
+
+_LRC_LINE_RE = re.compile(r"\[(\d{2}):(\d{2})\.(\d{2,3})\]\s?(.*)")
+
+
+def _parse_lrc(synced_lyrics: str) -> list[dict[str, Any]]:
+    """Parse LRC-formatted synced lyrics into a list of {time_ms, text} dicts."""
+    lines: list[dict[str, Any]] = []
+    for raw_line in synced_lyrics.splitlines():
+        m = _LRC_LINE_RE.match(raw_line)
+        if m:
+            minutes, seconds, frac, text = m.groups()
+            ms_frac = int(frac) * (10 if len(frac) == 2 else 1)
+            time_ms = int(minutes) * 60_000 + int(seconds) * 1_000 + ms_frac
+            lines.append({"time_ms": time_ms, "text": text})
+    return lines
+
+
+@app.get("/lyrics/search")
+def lyrics_search(
+    title: str = Query("", description="Track title"),
+    artist: str = Query("", description="Artist name"),
+) -> dict[str, Any]:
+    """Search LRCLIB for synced/plain lyrics by title and artist."""
+    query = f"{title} {artist}".strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Provide at least title or artist.")
+
+    try:
+        resp = requests.get(
+            "https://lrclib.net/api/search",
+            params={"q": query},
+            headers={"User-Agent": "Shama/1.0"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        results: list[dict[str, Any]] = resp.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LRCLIB request failed: {exc}")
+
+    if not results:
+        return {"hasLyrics": False, "lyrics": None, "syncedLines": [], "source": None}
+
+    # Pick best match: prefer first result with syncedLyrics, else first with plainLyrics
+    best = None
+    for item in results:
+        if item.get("syncedLyrics"):
+            best = item
+            break
+    if best is None:
+        for item in results:
+            if item.get("plainLyrics"):
+                best = item
+                break
+    if best is None:
+        return {"hasLyrics": False, "lyrics": None, "syncedLines": [], "source": None}
+
+    synced_lines = _parse_lrc(best["syncedLyrics"]) if best.get("syncedLyrics") else []
+    plain = best.get("plainLyrics") or ""
+
+    return {
+        "hasLyrics": True,
+        "lyrics": plain,
+        "syncedLines": synced_lines,
+        "source": "lrclib",
+        "trackName": best.get("trackName", ""),
+        "artistName": best.get("artistName", ""),
+    }
 
 
 @app.get("/lyrics/{video_id}")

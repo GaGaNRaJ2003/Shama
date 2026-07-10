@@ -558,6 +558,520 @@ export const catalog: WorkData[] = [
       }
     ]
   }
+  ,
+  {
+    id: '06',
+    title: 'Hazaaron Khwahishein Aisi',
+    artist: 'Jagjit Singh',
+    poet: 'Mirza Ghalib',
+    form: 'Ghazal',
+    audioUrl: '',
+    coverUrl: '',
+    ytQuery: 'Hazaaron Khwahishein Aisi Jagjit Singh Ghalib',
+    mood: 'Despair & Defiance',
+    lines: [
+      {
+        id: 'L06-1',
+        urdu: 'ہزاروں خواہشیں ایسی کہ ہر خواہش پہ دم نکلے',
+        hindi: 'हज़ारों ख़्वाहिशें ऐसी कि हर ख़्वाहिश पे दम निकले',
+        roman: 'hazaaron khwahishein aisi ke har khwahish pe dam nikle',
+        englishText: 'A thousand desires, each so strong that one could die for it',
+        transliteration: 'Hazārōñ khwāhisheñ aisī ke har khwāhish pe dam nikle',
+        translation: 'I have a thousand desires, each worthy enough to die for.',
+        simple: 'Ghalib says he has countless yearnings, each so intense it could take his life.',
+        detailed: 'The opening establishes the ghazal\'s premise: desire so extravagant that a single lifetime cannot contain even one wish, let alone a thousand. "Dam nikle" — the breath leaving — makes each desire a little death.',
+        vocabulary: [
+          { term: 'Khwahishein', meaning: 'Desires, wishes' },
+          { term: 'Dam nikle', meaning: 'To breathe one\'s last / die' }
+        ],
+        t: null
+      },
+      {
+        id: 'L06-2',
+        urdu: 'بہت نکلے مرے ارمان لیکن پھر بھی کم نکلے',
+        hindi: 'बहुत निकले मेरे अरमान लेकिन फिर भी कम निकले',
+        roman: 'bahut nikle mere armaan lekin phir bhi kam nikle',
+        englishText: 'Many of my longings were fulfilled, yet they still fell short',
+        transliteration: 'Bahut nikle mere armān lekin phir bhī kam nikle',
+        translation: 'Many of my longings did find expression, yet they remained too few.',
+        simple: 'Even though many desires were realized, they always seemed insufficient against the vastness of his wanting.',
+        detailed: 'The paradox of fulfillment feeling incomplete — "bahut" (many) vs "kam" (few) — captures the insatiability at the heart of Ghalibian longing.',
+        vocabulary: [
+          { term: 'Armaan', meaning: 'Longings, unfulfilled desires' },
+          { term: 'Kam nikle', meaning: 'Turned out to be insufficient' }
+        ],
+        t: null
+      },
+      {
+        id: 'L06-3',
+        urdu: 'ڈرے کیا موت سے جو شکل میں موت آئے',
+        hindi: 'डरे क्या मौत से जो शक्ल-ए-मौत आए',
+        roman: 'dare kya maut se jo shakl-e-maut aaye',
+        englishText: 'Why fear death when death itself appears before me?',
+        transliteration: 'Ḍare kyā maut se jo shakl-e-maut āye',
+        translation: 'Why would I fear death, when death-like visage confronts me daily?',
+        simple: 'He has faced so much suffering that death no longer frightens him.',
+        detailed: 'The lover has been so hollowed by grief that the feared enemy (death) is already a familiar face — fear becomes redundant when you live in dying.',
+        vocabulary: [
+          { term: 'Maut', meaning: 'Death' },
+          { term: 'Shakl-e-maut', meaning: 'The face/form of death' }
+        ],
+        t: null
+      },
+      {
+        id: 'L06-4',
+        urdu: 'نکلنا خلد سے آدم کا سنتے آئے تھے لیکن',
+        hindi: 'निकलना ख़ुल्द से आदम का सुनते आए थे लेकिन',
+        roman: 'nikalna khuld se aadam ka sunte aaye the lekin',
+        englishText: 'We had always heard of Adam being expelled from paradise, but',
+        transliteration: 'Nikalnā khuld se Ādam kā sunte āye the lekin',
+        translation: 'We had always heard of Adam\'s expulsion from paradise, but —',
+        simple: 'Ghalib references the tale of Adam\'s exile from heaven, setting up a comparison.',
+        detailed: 'By invoking Adam\'s fall, Ghalib elevates his own exile from the beloved\'s street to a cosmic event — personal heartbreak as a second Fall.',
+        vocabulary: [
+          { term: 'Khuld', meaning: 'Paradise, heaven' },
+          { term: 'Aadam', meaning: 'Adam (the first man)' }
+        ],
+        t: null
+      },
+      {
+        id: 'L06-5',
+        urdu: 'بہت بے آبرو ہو کر تیرے کوچے سے ہم نکلے',
+        hindi: 'बहुत बे-आबरू हो कर तेरे कूचे से हम निकले',
+        roman: 'bahut be-aabru ho kar tere kooче se hum nikle',
+        englishText: 'We left your lane utterly disgraced',
+        transliteration: 'Bahut be-ābrū ho kar tere kūche se ham nikle',
+        translation: 'We emerged from your street utterly stripped of honour.',
+        simple: 'He was so thoroughly humiliated leaving the beloved\'s street that it rivalled Adam\'s expulsion from Eden.',
+        detailed: 'The maqta completes the Adam comparison: his departure from the beloved\'s lane was his own fall from grace — "be-aabru" (dishonoured) echoing the shame of exile.',
+        vocabulary: [
+          { term: 'Be-aabru', meaning: 'Dishonoured, disgraced' },
+          { term: 'Koocha', meaning: 'Lane, alley (of the beloved)' }
+        ],
+        t: null
+      }
+    ]
+  },
+  {
+    id: '07',
+    title: 'Koi Umeed Bar Nahin Aati',
+    artist: 'Mehdi Hassan',
+    poet: 'Mirza Ghalib',
+    form: 'Ghazal',
+    audioUrl: '',
+    coverUrl: '',
+    ytQuery: 'Koi Umeed Bar Nahin Aati Mehdi Hassan Ghalib',
+    mood: 'Despair & Resignation',
+    lines: [
+      {
+        id: 'L07-1',
+        urdu: 'کوئی امید بر نہیں آتی',
+        hindi: 'कोई उम्मीद बर नहीं आती',
+        roman: 'koi umeed bar nahin aati',
+        englishText: 'No hope bears fruit anymore',
+        transliteration: 'Koī umīd bar nahīñ ātī',
+        translation: 'Not a single hope comes to fruition.',
+        simple: 'Ghalib declares that none of his hopes are being fulfilled — a state of total despair.',
+        detailed: 'The opening "koi...nahin" (not a single) creates absolute negation. "Bar aana" (to bear fruit) renders hope as a barren tree, setting the bleakest of tones.',
+        vocabulary: [
+          { term: 'Umeed', meaning: 'Hope, expectation' },
+          { term: 'Bar nahin aati', meaning: 'Does not come to fruition' }
+        ],
+        t: null
+      },
+      {
+        id: 'L07-2',
+        urdu: 'کوئی صورت نظر نہیں آتی',
+        hindi: 'कोई सूरत नज़र नहीं आती',
+        roman: 'koi surat nazar nahin aati',
+        englishText: 'No way out is visible',
+        transliteration: 'Koī sūrat nazar nahīñ ātī',
+        translation: 'No solution appears in sight.',
+        simple: 'He sees no way out, no solution to his predicament.',
+        detailed: 'The parallel construction reinforces the despair — neither hope (umeed) nor means (surat) present themselves. The symmetry is suffocating.',
+        vocabulary: [
+          { term: 'Surat', meaning: 'Way, form, solution' },
+          { term: 'Nazar nahin aati', meaning: 'Is not visible / cannot be seen' }
+        ],
+        t: null
+      },
+      {
+        id: 'L07-3',
+        urdu: 'مرتے ہیں آرزو میں مرنے کی',
+        hindi: 'मरते हैं आरज़ू में मरने की',
+        roman: 'marte hain aarzoo mein marne ki',
+        englishText: 'I die in the longing for death itself',
+        transliteration: 'Marte haiñ ārzū meñ marne kī',
+        translation: 'I am dying in the very desire to die.',
+        simple: 'He wants death as a release but even that wish goes unfulfilled — he dies longing to die.',
+        detailed: 'A devastating paradox: death, the final remedy, is itself an unattainable desire. The recursion (dying to die) captures absolute helplessness.',
+        vocabulary: [
+          { term: 'Aarzoo', meaning: 'Longing, desire' },
+          { term: 'Marte hain', meaning: 'Are dying / keep dying' }
+        ],
+        t: null
+      },
+      {
+        id: 'L07-4',
+        urdu: 'موت آتی ہے پر نہیں آتی',
+        hindi: 'मौत आती है पर नहीं आती',
+        roman: 'maut aati hai par nahin aati',
+        englishText: 'Death seems to come, but never truly arrives',
+        transliteration: 'Maut ātī hai par nahīñ ātī',
+        translation: 'Death approaches but never quite arrives.',
+        simple: 'Death keeps teasing him — it seems close but never actually comes to end his suffering.',
+        detailed: 'The cruel irony: even death is coquettish, approaching and retreating like an indifferent beloved. The lover is denied even the mercy of finality.',
+        vocabulary: [
+          { term: 'Maut', meaning: 'Death' },
+          { term: 'Par nahin aati', meaning: 'But does not come' }
+        ],
+        t: null
+      },
+      {
+        id: 'L07-5',
+        urdu: 'دل سے ترے نشانِ گم گئے جسے',
+        hindi: 'दिल से तेरे निशान-ए-ग़म गए जिसे',
+        roman: 'dil se tere nishan-e-gam gaye jise',
+        englishText: 'The one from whose heart the marks of your grief have faded',
+        transliteration: 'Dil se tere nishān-e-gham gaye jise',
+        translation: 'The one whose heart has lost the traces of your sorrow —',
+        simple: 'He describes someone whose heart no longer bears the scars of love — implying death of feeling.',
+        detailed: 'The "nishan-e-gham" (marks of grief) are badges of devotion; their fading is not healing but spiritual death — worse than physical demise.',
+        vocabulary: [
+          { term: 'Nishan', meaning: 'Mark, trace, sign' },
+          { term: 'Gham', meaning: 'Grief, sorrow' }
+        ],
+        t: null
+      },
+      {
+        id: 'L07-6',
+        urdu: 'ہم وہاں ہیں جہاں سے ہم کو بھی کچھ ہماری خبر نہیں آتی',
+        hindi: 'हम वहाँ हैं जहाँ से हम को भी कुछ हमारी ख़बर नहीं आती',
+        roman: 'hum wahan hain jahan se hum ko bhi kuchh hamari khabar nahin aati',
+        englishText: 'I am in a place from where even I receive no news of myself',
+        transliteration: 'Ham wahāñ haiñ jahāñ se ham ko bhī kuchh hamārī khabar nahīñ ātī',
+        translation: 'I am so far gone that even I get no tidings of myself.',
+        simple: 'He has gone to such depths of despair that he is lost even to himself — beyond self-awareness.',
+        detailed: 'One of Ghalib\'s most celebrated lines: the self is so alienated that it cannot send word back to itself. Existence beyond the reach of one\'s own consciousness.',
+        vocabulary: [
+          { term: 'Khabar', meaning: 'News, tidings, awareness' },
+          { term: 'Wahan', meaning: 'There (a distant, unreachable place)' }
+        ],
+        t: null
+      }
+    ]
+  },
+  {
+    id: '08',
+    title: 'Mujhse Pehli Si Mohabbat',
+    artist: 'Noor Jehan',
+    poet: 'Faiz Ahmed Faiz',
+    form: 'Ghazal',
+    audioUrl: '',
+    coverUrl: '',
+    ytQuery: 'Mujhse Pehli Si Mohabbat Noor Jehan Faiz',
+    mood: 'Awakening & Sacrifice',
+    lines: [
+      {
+        id: 'L08-1',
+        urdu: 'مجھ سے پہلی سی محبت مری محبوب نہ مانگ',
+        hindi: 'मुझ से पहली सी मोहब्बत मेरी महबूब न माँग',
+        roman: 'mujhse pehli si mohabbat meri mehboob na maang',
+        englishText: 'Do not ask of me, my love, the love I once gave you',
+        transliteration: 'Mujh se pehlī sī mohabbat merī mehbūb na māñg',
+        translation: 'Do not demand from me, beloved, the same love as before.',
+        simple: 'Faiz tells his beloved not to expect the same exclusive devotion he once gave — something has changed him.',
+        detailed: 'The famous opening redefines love poetry: the lover does not plead for the beloved but pushes back. The cause is political awakening — the world\'s suffering now competes with personal romance.',
+        vocabulary: [
+          { term: 'Mohabbat', meaning: 'Love' },
+          { term: 'Mehboob', meaning: 'Beloved' }
+        ],
+        t: null
+      },
+      {
+        id: 'L08-2',
+        urdu: 'میں نے سمجھا تھا کہ تو ہے تو دراخشاں ہے حیات',
+        hindi: 'मैं ने समझा था कि तू है तो दरख़्शाँ है हयात',
+        roman: 'main ne samjha tha ke tu hai to darakhshaan hai hayaat',
+        englishText: 'I once believed that your presence made life radiant',
+        transliteration: 'Maiñ ne samjhā thā ke tū hai to darakhshāñ hai hayāt',
+        translation: 'I once thought that life was luminous because you existed.',
+        simple: 'He recalls a time when the beloved\'s existence alone made life seem brilliant and worthwhile.',
+        detailed: '"Darakhshaan" (radiant) and "hayaat" (life) create an equation: beloved = light = reason to live. The past tense "samjha tha" signals this belief has been revised.',
+        vocabulary: [
+          { term: 'Darakhshaan', meaning: 'Radiant, luminous' },
+          { term: 'Hayaat', meaning: 'Life' }
+        ],
+        t: null
+      },
+      {
+        id: 'L08-3',
+        urdu: 'تیرا غم ہے تو جہاں میں کوئی غم نہیں ہے',
+        hindi: 'तेरा ग़म है तो जहाँ में कोई ग़म नहीं है',
+        roman: 'tera gham hai to jahan mein koi gham nahin hai',
+        englishText: 'If I have your sorrow, then no other sorrow exists in the world',
+        transliteration: 'Terā gham hai to jahāñ meñ koī gham nahīñ hai',
+        translation: 'When I held your grief, no other grief in the world mattered.',
+        simple: 'Once upon a time, loving her was enough — her sorrow blotted out all the world\'s pain.',
+        detailed: 'The couplet describes the narcotic exclusivity of romantic love: one grief (hers) anaesthetizes you to all other suffering. The poem will reject this anaesthesia.',
+        vocabulary: [
+          { term: 'Gham', meaning: 'Grief, sorrow' },
+          { term: 'Jahan', meaning: 'World' }
+        ],
+        t: null
+      },
+      {
+        id: 'L08-4',
+        urdu: 'اور بھی دکھ ہیں زمانے میں محبت کے سوا',
+        hindi: 'और भी दुख हैं ज़माने में मोहब्बत के सिवा',
+        roman: 'aur bhi dukh hain zamaane mein mohabbat ke siva',
+        englishText: 'There are other sorrows in the world besides love',
+        transliteration: 'Aur bhī dukh haiñ zamāne meñ mohabbat ke sivā',
+        translation: 'There are other griefs in this world beyond love alone.',
+        simple: 'He acknowledges that the world holds sufferings far greater than romantic heartbreak.',
+        detailed: 'The pivotal turn: Faiz breaks the ghazal tradition that makes the beloved the sole axis. Poverty, injustice, oppression — these too demand his heart.',
+        vocabulary: [
+          { term: 'Dukh', meaning: 'Sorrows, sufferings' },
+          { term: 'Ke siva', meaning: 'Besides, apart from' }
+        ],
+        t: null
+      },
+      {
+        id: 'L08-5',
+        urdu: 'راحتیں اور بھی ہیں وصل کی راحت کے سوا',
+        hindi: 'राहतें और भी हैं वस्ल की राहत के सिवा',
+        roman: 'rahatein aur bhi hain wasl ki raahat ke siva',
+        englishText: 'There are other comforts too, beyond the comfort of union',
+        transliteration: 'Rāhateñ aur bhī haiñ wasl kī rāhat ke sivā',
+        translation: 'There are other consolations beyond the solace of union with you.',
+        simple: 'The comfort of being united with the beloved is not the only joy — there are larger causes worth living for.',
+        detailed: 'Faiz completes his revolutionary redefinition: "wasl" (union with beloved) is not the only paradise. Social justice, collective liberation offer their own "raahat."',
+        vocabulary: [
+          { term: 'Rahatein', meaning: 'Comforts, consolations' },
+          { term: 'Wasl', meaning: 'Union (with the beloved)' }
+        ],
+        t: null
+      },
+      {
+        id: 'L08-6',
+        urdu: 'مجھ سے پہلی سی محبت مری محبوب نہ مانگ',
+        hindi: 'मुझ से पहली सी मोहब्बत मेरी महबूब न माँग',
+        roman: 'mujhse pehli si mohabbat meri mehboob na maang',
+        englishText: 'Do not ask of me, my love, the love I once gave you',
+        transliteration: 'Mujh se pehlī sī mohabbat merī mehbūb na māñg',
+        translation: 'Do not demand from me, beloved, the same love as before.',
+        simple: 'The refrain returns — the beloved must accept that the poet now belongs also to the wider world.',
+        detailed: 'The closing repetition reframes what seemed like romantic betrayal as moral evolution. The refrain is both apology and manifesto.',
+        vocabulary: [
+          { term: 'Pehli si', meaning: 'Like before, the same as the first' },
+          { term: 'Na maang', meaning: 'Do not ask / demand' }
+        ],
+        t: null
+      }
+    ]
+  },
+  {
+    id: '09',
+    title: 'Wo Jo Hum Mein Tum Mein Qarar Tha',
+    artist: 'Abida Parveen',
+    poet: 'Faiz Ahmed Faiz',
+    form: 'Ghazal',
+    audioUrl: '',
+    coverUrl: '',
+    ytQuery: 'Wo Jo Hum Mein Tum Mein Qarar Tha Abida Parveen Faiz',
+    mood: 'Loss & Remembrance',
+    lines: [
+      {
+        id: 'L09-1',
+        urdu: 'وہ جو ہم میں تم میں قرار تھا، تمہیں یاد ہو کہ نہ یاد ہو',
+        hindi: 'वो जो हम में तुम में क़रार था, तुम्हें याद हो कि न याद हो',
+        roman: 'wo jo hum mein tum mein qarar tha, tumhein yaad ho ke na yaad ho',
+        englishText: 'That bond which existed between us — you may remember or may not',
+        transliteration: 'Wo jo ham meñ tum meñ qarār thā, tumheñ yād ho ke na yād ho',
+        translation: 'That covenant between you and me — whether you remember it or not.',
+        simple: 'He recalls a mutual understanding between them, noting bitterly that she may have forgotten it entirely.',
+        detailed: 'The refrain "tumhein yaad ho ke na yaad ho" is devastating in its casualness — it grants the beloved the right to forget while documenting the forgetting as a wound.',
+        vocabulary: [
+          { term: 'Qarar', meaning: 'Pact, understanding, peace' },
+          { term: 'Yaad ho ke na yaad ho', meaning: 'Whether you remember or not' }
+        ],
+        t: null
+      },
+      {
+        id: 'L09-2',
+        urdu: 'وہ جو لطف مجلسِ یار تھا، تمہیں یاد ہو کہ نہ یاد ہو',
+        hindi: 'वो जो लुत्फ़ मजलिस-ए-यार था, तुम्हें याद हो कि न याद हो',
+        roman: 'wo jo lutf majlis-e-yaar tha, tumhein yaad ho ke na yaad ho',
+        englishText: 'That joy of being in each other\'s company — you may remember or not',
+        transliteration: 'Wo jo lutf majlis-e-yār thā, tumheñ yād ho ke na yād ho',
+        translation: 'That delight of the beloved\'s gathering — whether you recall it or not.',
+        simple: 'He remembers the pleasure of being together in each other\'s company, acknowledging she may not.',
+        detailed: '"Majlis-e-yaar" (the beloved\'s assembly) evokes warmth, conversation, laughter — a whole ecology of intimacy now extinct. The refrain lets him mourn without accusing.',
+        vocabulary: [
+          { term: 'Lutf', meaning: 'Pleasure, delight, grace' },
+          { term: 'Majlis-e-yaar', meaning: 'Gathering of the beloved / friends' }
+        ],
+        t: null
+      },
+      {
+        id: 'L09-3',
+        urdu: 'کوئی دل نہ پھینکے نظر میں نگار',
+        hindi: 'कोई दिल न फेंके नज़र में निगार',
+        roman: 'koi dil na pheinke nazar mein nigaar',
+        englishText: 'Let no beauty cast her heart into your gaze',
+        transliteration: 'Koī dil na pheñke nazar meñ nigār',
+        translation: 'May no beauty throw her heart into your line of sight.',
+        simple: 'He prays no one else catches her eye or heart — a jealous, protective wish.',
+        detailed: 'The image of a heart being "thrown" into a glance fuses violence and romance; the prayer reveals lingering possessiveness despite the surface composure.',
+        vocabulary: [
+          { term: 'Nigaar', meaning: 'Beauty, beloved' },
+          { term: 'Nazar', meaning: 'Gaze, sight' }
+        ],
+        t: null
+      },
+      {
+        id: 'L09-4',
+        urdu: 'جو مجھے مسرت اور غم دیے تھے تم نے',
+        hindi: 'जो मुझे मसर्रत और ग़म दिए थे तुम ने',
+        roman: 'jo mujhe masarrat aur gham diye the tum ne',
+        englishText: 'The joys and sorrows you gave me',
+        transliteration: 'Jo mujhe masarrat aur gham diye the tum ne',
+        translation: 'The happiness and grief you bestowed upon me —',
+        simple: 'He catalogues what she gave him: both joy and pain, equally treasured.',
+        detailed: 'By placing "masarrat" (joy) and "gham" (grief) side by side as equal gifts, Faiz dissolves the boundary between pleasure and pain in love.',
+        vocabulary: [
+          { term: 'Masarrat', meaning: 'Joy, happiness' },
+          { term: 'Gham', meaning: 'Grief, sorrow' }
+        ],
+        t: null
+      },
+      {
+        id: 'L09-5',
+        urdu: 'وہ جو شب کے ہم نشیں تھے، تمہیں یاد ہو کہ نہ یاد ہو',
+        hindi: 'वो जो शब के हम-नशीं थे, तुम्हें याद हो कि न याद हो',
+        roman: 'wo jo shab ke hum-nasheen the, tumhein yaad ho ke na yaad ho',
+        englishText: 'Those who were our companions of the night — you may remember or not',
+        transliteration: 'Wo jo shab ke ham-nashīñ the, tumheñ yād ho ke na yād ho',
+        translation: 'Those who sat with us through the night — whether you remember or not.',
+        simple: 'He recalls the companions who shared their evenings, wondering if she even remembers them.',
+        detailed: '"Shab ke ham-nasheen" (companions of the night) could be fellow revolutionaries or fellow lovers — the ambiguity is deliberate in Faiz\'s dual-register poetry.',
+        vocabulary: [
+          { term: 'Shab', meaning: 'Night' },
+          { term: 'Ham-nasheen', meaning: 'Companions, those who sit together' }
+        ],
+        t: null
+      }
+    ]
+  },
+  {
+    id: '10',
+    title: 'Tujhe Yaad Na Meri Aayi',
+    artist: 'Mehdi Hassan',
+    poet: 'Mir Taqi Mir',
+    form: 'Ghazal',
+    audioUrl: '',
+    coverUrl: '',
+    ytQuery: 'Tujhe Yaad Na Meri Aayi Mehdi Hassan Mir Taqi Mir',
+    mood: 'Lament & Reproach',
+    lines: [
+      {
+        id: 'L10-1',
+        urdu: 'تجھے یاد نہ میری آئی، کسی سے اب کیا کہیے',
+        hindi: 'तुझे याद न मेरी आई, किसी से अब क्या कहिए',
+        roman: 'tujhe yaad na meri aayi, kisi se ab kya kahiye',
+        englishText: 'You did not remember me — what can I say to anyone now?',
+        transliteration: 'Tujhe yād na merī āī, kisī se ab kyā kahiye',
+        translation: 'You never thought of me — what is there left to say to anyone?',
+        simple: 'She never remembered him, and now he has no words left to express this abandonment to the world.',
+        detailed: 'The line carries the weight of Mir\'s signature simplicity: no ornament, just the blunt fact of being forgotten and the speechlessness it produces.',
+        vocabulary: [
+          { term: 'Yaad na aayi', meaning: 'Did not remember' },
+          { term: 'Kya kahiye', meaning: 'What can one say' }
+        ],
+        t: null
+      },
+      {
+        id: 'L10-2',
+        urdu: 'تری محفل میں لیکن ہم نہ ٹھہرے',
+        hindi: 'तेरी महफ़िल में लेकिन हम न ठहरे',
+        roman: 'teri mehfil mein lekin hum na thehre',
+        englishText: 'Yet in your gathering, I could not stay',
+        transliteration: 'Terī mehfil meñ lekin ham na ṭhehre',
+        translation: 'But I could not remain in your assembly.',
+        simple: 'He tried to stay in her company but couldn\'t — whether from shame or heartbreak.',
+        detailed: 'The "mehfil" (gathering) suggests a public space where his grief made him an outsider. The understated "na thehre" (did not stay) conceals volumes of pain.',
+        vocabulary: [
+          { term: 'Mehfil', meaning: 'Assembly, gathering, soirée' },
+          { term: 'Na thehre', meaning: 'Could not stay / remain' }
+        ],
+        t: null
+      },
+      {
+        id: 'L10-3',
+        urdu: 'تری دنیا سے ہو کر مایوس، چل دیے',
+        hindi: 'तेरी दुनिया से हो कर मायूस, चल दिए',
+        roman: 'teri duniya se ho kar mayoos, chal diye',
+        englishText: 'Despairing of your world, I departed',
+        transliteration: 'Terī duniyā se ho kar māyūs, chal diye',
+        translation: 'Having lost all hope in your world, I left.',
+        simple: 'He gave up on her world entirely and walked away in despair.',
+        detailed: '"Teri duniya" makes the beloved\'s sphere a self-contained universe; to leave it is a kind of cosmic exile. "Chal diye" is quiet, final, without drama.',
+        vocabulary: [
+          { term: 'Mayoos', meaning: 'Despairing, hopeless' },
+          { term: 'Chal diye', meaning: 'Departed, walked away' }
+        ],
+        t: null
+      },
+      {
+        id: 'L10-4',
+        urdu: 'تجھے کیا میری قدر ہوگی، مگر اے سنگدل',
+        hindi: 'तुझे क्या मेरी क़द्र होगी, मगर ऐ संगदिल',
+        roman: 'tujhe kya meri qadr hogi, magar ae sangdil',
+        englishText: 'What would you know of my worth, O stone-hearted one?',
+        transliteration: 'Tujhe kyā merī qadr hogī, magar ae sangdil',
+        translation: 'How would you ever know my value, O you of the stone heart?',
+        simple: 'He reproaches her: she is too hard-hearted to recognize what she had in him.',
+        detailed: '"Sangdil" (stone-hearted) is the classic reproach of the ghazal lover. The question is rhetorical — he knows she will never value what she casually discarded.',
+        vocabulary: [
+          { term: 'Qadr', meaning: 'Value, worth, appreciation' },
+          { term: 'Sangdil', meaning: 'Stone-hearted, cruel' }
+        ],
+        t: null
+      },
+      {
+        id: 'L10-5',
+        urdu: 'کسی کو اتنا نہ چاہو کہ پھر کچھ اور نظر نہ آئے',
+        hindi: 'किसी को इतना न चाहो कि फिर कुछ और नज़र न आए',
+        roman: 'kisi ko itna na chaho ke phir kuchh aur nazar na aaye',
+        englishText: 'Do not love someone so much that nothing else remains visible',
+        transliteration: 'Kisī ko itnā na chāho ke phir kuchh aur nazar na āye',
+        translation: 'Do not love anyone so wholly that the rest of the world disappears.',
+        simple: 'A warning from experience: loving too deeply blinds you to everything else and leads to ruin.',
+        detailed: 'Mir turns didactic — the lover who has been destroyed by exclusive devotion now counsels moderation. The advice is sincere yet self-contradictory: Mir could never follow it himself.',
+        vocabulary: [
+          { term: 'Chaho', meaning: 'Love / desire' },
+          { term: 'Nazar na aaye', meaning: 'Nothing else be visible' }
+        ],
+        t: null
+      },
+      {
+        id: 'L10-6',
+        urdu: 'مرؔ کی غزل کا کیا کہنا، تمام عمر رلا دیے',
+        hindi: 'मीर की ग़ज़ल का क्या कहना, तमाम उम्र रुला दिए',
+        roman: 'Mir ki ghazal ka kya kehna, tamaam umr rula diye',
+        englishText: 'What can one say of Mir\'s ghazal — it made us weep a whole lifetime',
+        transliteration: 'Mīr kī ghazal kā kyā kehnā, tamām umr rulā diye',
+        translation: 'What praise for Mir\'s ghazal — it has made us weep our entire lives.',
+        simple: 'A self-referential closing: Mir\'s poetry has the power to make listeners weep endlessly.',
+        detailed: 'The maqta references Mir himself with characteristic self-aware pathos. His poetry IS sorrow distilled — to read it is to enter a lifelong vigil of tears.',
+        vocabulary: [
+          { term: 'Tamaam umr', meaning: 'The entire lifetime' },
+          { term: 'Rula diye', meaning: 'Made (us) weep' }
+        ],
+        t: null
+      }
+    ]
+  }
 ]
 
 export default catalog
