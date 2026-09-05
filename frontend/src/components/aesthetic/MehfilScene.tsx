@@ -8,23 +8,48 @@ interface MehfilSceneProps {
   onTogglePlay?: () => void
 }
 
-// 3D Realistic Candle component (The Shama)
-function Candle() {
+// The Shama itself: a clay diya, oil pooled in the well and a cotton batti
+// burning at the pinched spout.
+function Diya() {
   const flameGroupRef = useRef<THREE.Group>(null)
   const flameOuterRef = useRef<THREE.Mesh>(null)
   const flameInnerRef = useRef<THREE.Mesh>(null)
   const flameBaseRef = useRef<THREE.Mesh>(null)
   const lightRef = useRef<THREE.PointLight>(null)
 
-  // Generate teardrop points profile for LatheGeometry
-  const points: THREE.Vector2[] = []
-  for (let i = 0; i < 20; i++) {
-    const t = i / 19
-    // Teardrop profile: bottom is thickest, curving inwards to a pointed tip at top
-    const x = Math.sin(t * Math.PI) * 0.058 * (1.0 - t * 0.45)
-    const y = t * 0.2
-    points.push(new THREE.Vector2(x, y))
-  }
+  // Teardrop flame profile for LatheGeometry. Memoised: a fresh array each
+  // render gave `args` a new identity and rebuilt all three lathe geometries.
+  const points = useMemo(() => {
+    const pts: THREE.Vector2[] = []
+    for (let i = 0; i < 20; i++) {
+      const t = i / 19
+      // Bottom is thickest, curving inwards to a pointed tip at top
+      const x = Math.sin(t * Math.PI) * 0.058 * (1.0 - t * 0.45)
+      const y = t * 0.2
+      pts.push(new THREE.Vector2(x, y))
+    }
+    return pts
+  }, [])
+
+  // Diya profile: out along the foot, up and outward to the rim, then back
+  // down the inner wall so the bowl is hollow and the rim reads thin.
+  const bowlPoints = useMemo(
+    () => [
+      new THREE.Vector2(0.0, 0.0),
+      new THREE.Vector2(0.055, 0.0),
+      new THREE.Vector2(0.1, 0.006),
+      new THREE.Vector2(0.135, 0.022),
+      new THREE.Vector2(0.158, 0.046),
+      new THREE.Vector2(0.168, 0.072),
+      new THREE.Vector2(0.166, 0.09),   // rim
+      new THREE.Vector2(0.15, 0.086),   // and back down the inside
+      new THREE.Vector2(0.132, 0.062),
+      new THREE.Vector2(0.108, 0.04),
+      new THREE.Vector2(0.06, 0.03),
+      new THREE.Vector2(0.0, 0.028),
+    ],
+    []
+  )
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime()
@@ -50,48 +75,66 @@ function Candle() {
   })
 
   return (
-    <group position={[-0.55, -0.4, 0]}>
-      {/* Copper Holder Base */}
-      <mesh position={[0, 0.03, 0]}>
-        <cylinderGeometry args={[0.26, 0.3, 0.06, 32]} />
-        <meshStandardMaterial color="#b2734a" metalness={0.9} roughness={0.15} />
-      </mesh>
-      
-      {/* Candle Stem Cup */}
-      <mesh position={[0, 0.1, 0]}>
-        <cylinderGeometry args={[0.1, 0.08, 0.1, 16]} />
-        <meshStandardMaterial color="#8e512d" metalness={0.95} roughness={0.1} />
+    // Placement is dictated by the camera frustum: at fov 42 and z=1.7 the
+    // square viewport shows x in [-0.653, 0.653], so the old x=-0.55 put the
+    // thali's left edge at -0.82 — off screen. y is raised from the candle's
+    // -0.4 because a diya bowl is ~0.09 tall against a 0.6 candle.
+    <group position={[-0.34, 0.2, 0]}>
+      {/* Brass thali the diya rests on — a diya is a ground-resting object, and
+          the scene has no floor to rest it on. */}
+      <mesh position={[0, -0.012, 0]}>
+        <cylinderGeometry args={[0.26, 0.27, 0.016, 48]} />
+        <meshStandardMaterial color="#b2734a" metalness={0.9} roughness={0.22} />
       </mesh>
 
-      {/* Wax Body (with Emissive Warm Heat Glow near flame) */}
-      <mesh position={[0, 0.45, 0]}>
-        <cylinderGeometry args={[0.07, 0.07, 0.6, 24]} />
-        <meshStandardMaterial 
-          color="#eae4da" 
-          roughness={0.65} 
-          emissive="#ff771a" 
-          emissiveIntensity={0.25} 
+      {/* The diya: a shallow earthen bowl. Lathed from a profile that runs out
+          along the foot, up the outer wall, over the rim and back down the
+          inside, so the rim reads thin and the well holds the oil. */}
+      <mesh position={[0, 0, 0]}>
+        <latheGeometry args={[bowlPoints, 48]} />
+        <meshStandardMaterial
+          color="#a85a33"
+          roughness={0.88}
+          metalness={0}
+          emissive="#ff771a"
+          emissiveIntensity={0.16}
+          side={THREE.DoubleSide}
         />
       </mesh>
 
-      {/* Melted wax drips */}
-      <mesh position={[0, 0.74, 0.04]} rotation={[0.2, 0, 0]}>
-        <sphereGeometry args={[0.02, 8, 8]} />
-        <meshStandardMaterial color="#eae4da" roughness={0.7} />
-      </mesh>
-      <mesh position={[-0.04, 0.72, -0.02]} rotation={[-0.2, 0, 0]}>
-        <sphereGeometry args={[0.015, 8, 8]} />
-        <meshStandardMaterial color="#eae4da" roughness={0.7} />
+      {/* Pinched spout. A lathe is a surface of revolution and cannot express
+          an asymmetric pinch, so the spout is its own small mesh at the rim. */}
+      <mesh position={[0.148, 0.052, 0]} rotation={[0, 0, -Math.PI / 2 - 0.22]}>
+        <coneGeometry args={[0.052, 0.1, 16, 1, false, 0, Math.PI]} />
+        <meshStandardMaterial color="#a85a33" roughness={0.88} metalness={0} />
       </mesh>
 
-      {/* Wick */}
-      <mesh position={[0, 0.77, 0]}>
-        <cylinderGeometry args={[0.008, 0.008, 0.06]} />
-        <meshBasicMaterial color="#1c1613" />
+      {/* Oil pooled in the well. Low roughness + a little metalness is what
+          sells "liquid" rather than "painted". */}
+      <mesh position={[0, 0.042, 0]}>
+        <cylinderGeometry args={[0.125, 0.115, 0.006, 40]} />
+        <meshStandardMaterial
+          color="#3d2410"
+          roughness={0.08}
+          metalness={0.45}
+          emissive="#ff9a3c"
+          emissiveIntensity={0.22}
+        />
       </mesh>
 
-      {/* Layered Realistic Flickering Flame */}
-      <group ref={flameGroupRef} position={[0, 0.78, 0]}>
+      {/* Cotton batti lying across the spout, soaked end forward */}
+      <mesh position={[0.115, 0.055, 0]} rotation={[0, 0, Math.PI / 2 - 0.28]}>
+        <cylinderGeometry args={[0.009, 0.007, 0.13, 10]} />
+        <meshStandardMaterial color="#d8cbb4" roughness={0.9} />
+      </mesh>
+      {/* Charred tip where the flame sits */}
+      <mesh position={[0.158, 0.072, 0]}>
+        <sphereGeometry args={[0.011, 8, 8]} />
+        <meshBasicMaterial color="#2a1c14" />
+      </mesh>
+
+      {/* Layered Realistic Flickering Flame — unchanged, reseated on the spout */}
+      <group ref={flameGroupRef} position={[0.158, 0.078, 0]}>
         {/* Outer Orange Glowing Envelope */}
         <mesh ref={flameOuterRef}>
           <latheGeometry args={[points, 32]} />
@@ -112,7 +155,7 @@ function Candle() {
       </group>
 
       {/* Point Light originating from flame */}
-      <pointLight ref={lightRef} position={[0, 0.9, 0.12]} intensity={2.8} distance={3.5} color="#ffd48a" />
+      <pointLight ref={lightRef} position={[0.158, 0.16, 0.1]} intensity={2.8} distance={3.5} color="#ffd48a" />
     </group>
   )
 }
@@ -136,11 +179,14 @@ function Moths() {
   const wingLeftRefs = useRef<THREE.Mesh[]>([]);
   const wingRightRefs = useRef<THREE.Mesh[]>([]);
 
-  const mothConfigs: MothState[] = [
-    { x: -0.55, y: 0.48, z: 0, angle: 0, radiusX: 0.28, radiusZ: 0.22, speed: 2.2, yFreq: 1.8, yOffset: 0.2 },
-    { x: -0.55, y: 0.48, z: 0, angle: Math.PI * 0.6, radiusX: 0.35, radiusZ: 0.32, speed: -1.8, yFreq: 2.4, yOffset: 0.5 },
-    { x: -0.55, y: 0.48, z: 0, angle: Math.PI * 1.3, radiusX: 0.24, radiusZ: 0.28, speed: 2.6, yFreq: 3.2, yOffset: -0.1 },
-  ];
+  const mothConfigs: MothState[] = useMemo(() => [
+    // World-space, orbiting the diya's flame (group y 0.2 + local 0.078 ≈ 0.28).
+    // Radii are capped so the widest orbit stays inside the same frustum the
+    // lamp has to fit in.
+    { x: -0.28, y: 0.32, z: 0, angle: 0, radiusX: 0.24, radiusZ: 0.2, speed: 2.2, yFreq: 1.8, yOffset: 0.2 },
+    { x: -0.28, y: 0.32, z: 0, angle: Math.PI * 0.6, radiusX: 0.26, radiusZ: 0.28, speed: -1.8, yFreq: 2.4, yOffset: 0.5 },
+    { x: -0.28, y: 0.32, z: 0, angle: Math.PI * 1.3, radiusX: 0.21, radiusZ: 0.24, speed: 2.6, yFreq: 3.2, yOffset: -0.1 },
+  ], []);
 
   useFrame(({ clock }) => {
     const elapsed = clock.getElapsedTime();
@@ -510,8 +556,8 @@ function SceneContents({ isPlaying, coverUrl, onTogglePlay }: MehfilSceneProps) 
       <directionalLight position={[3, 5, 2]} intensity={1.1} color="#f4efea" />
       <pointLight position={[1, 1, 1.5]} intensity={1.2} color="#d98a5b" />
 
-      {/* The Shama (Candle & flickering flame lights) */}
-      <Candle />
+      {/* The Shama (diya + its flickering flame light) */}
+      <Diya />
 
       {/* The Parwana (Fluttering moths) */}
       <Moths />

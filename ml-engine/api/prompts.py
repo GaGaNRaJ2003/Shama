@@ -2,6 +2,8 @@
 System prompts and few-shot examples for the Shama meaning engine.
 """
 
+import json
+
 SYSTEM_PROMPT = """You are a distinguished scholar of Indo-Persian poetry (Urdu ghazal, qawwali, and classical traditions). You explain poetry with the warmth and patience of a beloved Urdu literature professor — someone who makes students fall in love with the depth of every word.
 
 Your task: Given a couplet (sher), provide a rich, layered interpretation.
@@ -44,6 +46,18 @@ DEPTH_INSTRUCTIONS = {
     "detailed": "Provide exhaustive interpretation. The 'simple' field should be 2-3 sentences, 'detailed' should be 6-10 sentences covering historical context, Sufi interpretation, romantic interpretation, philosophical layers, and poetic craft. List at least 4-5 vocabulary items and all identifiable literary devices.",
 }
 
+# One response serves every reading depth in the UI, so we always ask for both
+# registers in a single call. Asking twice cost two LLM round-trips and two
+# cache rows for a payload the first response already contained in full.
+FULL_DEPTH_INSTRUCTION = (
+    "Write BOTH registers well, because the reader chooses between them: "
+    "'simple' must be 2-3 plain sentences that assume no familiarity with the tradition, "
+    "and 'detailed' must be 6-10 sentences covering historical context, Sufi and romantic "
+    "readings, philosophical layers and poetic craft. "
+    "List 3-5 vocabulary items (only genuinely difficult Urdu/Persian words) and every "
+    "literary device you can actually identify — do not invent devices to fill the list."
+)
+
 
 FEW_SHOT_EXAMPLES = [
     {
@@ -82,20 +96,40 @@ FEW_SHOT_EXAMPLES = [
 ]
 
 
+def _few_shot_block() -> str:
+    """One worked example. Anchors tone, vocabulary depth and device naming."""
+    ex = FEW_SHOT_EXAMPLES[0]
+    return (
+        "--- Example of the quality and shape expected ---\n"
+        f'Couplet: "{ex["couplet"]}"\n'
+        f'Poet: {ex["poet"]}\n'
+        f"Response: {json.dumps(ex['response'], ensure_ascii=False)}\n"
+        "--- End example ---\n"
+    )
+
+
 def build_prompt(
     couplet: str,
     poet: str | None,
     language: str,
-    depth: str,
+    depth: str | None = None,
     rag_context: list[str] | None = None,
 ) -> str:
-    """Build the user prompt with RAG context and instructions."""
+    """Build the user prompt with RAG context and instructions.
+
+    `depth` is retained for callers that still pass it, but the default (None)
+    asks for both registers at once — see FULL_DEPTH_INSTRUCTION.
+    """
 
     parts = []
 
     # Language and depth instructions
     parts.append(f"Language instruction: {LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['roman'])}")
-    parts.append(f"Depth instruction: {DEPTH_INSTRUCTIONS.get(depth, DEPTH_INSTRUCTIONS['simple'])}")
+    parts.append(
+        f"Depth instruction: {DEPTH_INSTRUCTIONS[depth] if depth in DEPTH_INSTRUCTIONS else FULL_DEPTH_INSTRUCTION}"
+    )
+
+    parts.append("\n" + _few_shot_block())
 
     # RAG context if available
     if rag_context:

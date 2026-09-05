@@ -1,24 +1,24 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
-import {
-  Play,
-  Pause,
-  Volume2,
-  BookOpen,
-  HelpCircle,
-  FileText,
-  VolumeX,
-  Search,
-  Music,
-  Loader2,
-  Heart,
-  Trash2
-} from 'lucide-react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { Loader2, Music, Play, Search, Trash2 } from 'lucide-react'
 import './App.css'
 import { ShaderBackdrop } from './components/aesthetic/ShaderBackdrop'
-import { LiquidLogoMark } from './components/aesthetic/LiquidLogoMark'
-import { MehfilScene } from './components/aesthetic/MehfilScene'
 import { YouTubePlayer } from './components/YouTubePlayer'
+import ListeningStage from './components/listening/ListeningStage'
+import MehfilJamBar, { JamJoinPrompt } from './components/listening/MehfilJamBar'
+import MehfilQueue from './components/listening/MehfilQueue'
+import MeaningPanel, { type StudyTab } from './components/listening/MeaningPanel'
+import RecordingSheet, { type Couplet, type SyncedLine } from './components/listening/RecordingSheet'
+import SherSheet, { type ScriptMode } from './components/listening/SherSheet'
+import type { TimelineMarker } from './components/listening/PoetryTimeline'
 import { catalog, type WorkData, type LineData } from './data/ghazals'
+import { sanitizeMeaning, type Meaning } from './data/meaning'
+import {
+  readReadiness,
+  writeReadiness,
+  score as readinessScore,
+  describe as describeReadiness,
+  type Readiness,
+} from './data/readiness'
 import {
   getUserCatalog,
   addToCatalog,
@@ -26,8 +26,25 @@ import {
   isInCatalog,
   type UserCatalogEntry,
 } from './data/userCatalog'
+import { useMehfilJam, DRIFT_TOLERANCE_MS, HEARTBEAT_MS } from './data/useMehfilJam'
+import {
+  makeMehfilItem,
+  moveItem,
+  readMehfil,
+  sameItem,
+  writeMehfil,
+  type MehfilItem,
+} from './data/mehfil'
 
 const API_BASE = 'http://localhost:5000'
+
+/** Nothing technical reaches the user (§17); the detail goes to the console. */
+const COPY = {
+  noRecording:
+    'We couldn’t find a recording of this ghazal right now. You can look for it under Explore.',
+  searchDown: 'We couldn’t reach the recordings just now.',
+  noResults: 'Nothing came back for that. Try another poet, singer or ghazal.',
+}
 
 interface YtTrack {
   videoId: string
@@ -35,26 +52,84 @@ interface YtTrack {
   artist: string
   album?: string
   duration?: string
+  /** Seconds. The single strongest signal that an LRC file is THIS recording. */
+  durationSeconds?: number
   thumbnail?: string
   coverUrl?: string
 }
 
+type View = 'LISTEN' | 'LIBRARY' | 'EXPLORE'
+
+/** Derived couplet timings, remembered so we align once per recording. */
+type TimingStore = Record<string, any> & { __keys?: Record<string, string> }
+
+function readAutoTimings(): TimingStore {
+  try {
+    const raw = localStorage.getItem('shama.autoTimings')
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeAutoTimings(next: TimingStore) {
+  try {
+    localStorage.setItem('shama.autoTimings', JSON.stringify(next))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** A one-tap correction per recording, remembered locally. */
+function readLyricOffset(videoId: string): number {
+  try {
+    const raw = localStorage.getItem('shama.lyricOffsets')
+    return raw ? Number(JSON.parse(raw)[videoId]) || 0 : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeLyricOffset(videoId: string, seconds: number) {
+  try {
+    const raw = localStorage.getItem('shama.lyricOffsets')
+    const all = raw ? JSON.parse(raw) : {}
+    if (seconds) all[videoId] = seconds
+    else delete all[videoId]
+    localStorage.setItem('shama.lyricOffsets', JSON.stringify(all))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Which script a sung line is in, so it is rendered with the right face. */
+function scriptOf(text: string): 'urdu' | 'other' {
+  return /[؀-ۿ]/.test(text) ? 'urdu' : 'other'
+}
+
+const FORM_LABELS: Record<string, string> = {
+  ghazal: 'غزل',
+  nazm: 'نظم',
+  qawwali: 'قوّالی',
+}
 
 export function App() {
   const [worksList, setWorksList] = useState<any[]>(catalog)
   const [activeWork, setActiveWork] = useState<WorkData>(catalog[0])
   const [activeLine, setActiveLine] = useState<LineData>(catalog[0].lines[0])
-  const [scriptMode, setScriptMode] = useState<'URDU' | 'HINDI' | 'ROMAN' | 'ENGLISH'>('URDU')
-  const [activeTab, setActiveTab] = useState<'SIMPLE' | 'LITERARY' | 'GLOSSARY'>('SIMPLE')
+  const [scriptMode, setScriptMode] = useState<ScriptMode>('URDU')
+  const [studyTab, setStudyTab] = useState<StudyTab>('MEANING')
   const [isPlaying, setIsPlaying] = useState<boolean>(false)
-  const [playbackProgress, setPlaybackProgress] = useState<number>(0)
   const [volume, setVolume] = useState<number>(75)
   const [isMuted, setIsMuted] = useState<boolean>(false)
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false)
 
-  // Console View state
-  const [currentView, setCurrentView] = useState<'LISTENING' | 'CATALOG' | 'FEATURED' | 'YTMUSIC'>('LISTENING')
+  const [currentView, setCurrentView] = useState<View>('LISTEN')
+  const [quiet, setQuiet] = useState<boolean>(false)
   const [searchTerm, setSearchTerm] = useState<string>('')
+  const [moodFilter, setMoodFilter] = useState<string | null>(null)
+  // Measured completeness per ghazal, filled in as recordings are prepared.
+  const [readiness, setReadiness] = useState<Record<string, Readiness>>(() => readReadiness())
 
   // Playable Audio Refs & Timestamps
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -69,99 +144,168 @@ export function App() {
   const [ytVideoId, setYtVideoId] = useState<string | null>(null) // id loaded in the IFrame player
   const [ytSeek, setYtSeek] = useState<number | null>(null)
   const [resolving, setResolving] = useState<boolean>(false)
+  // When we can't tell which recording a ghazal is, we ask instead of guessing.
+  const [resolveCandidates, setResolveCandidates] = useState<YtTrack[] | null>(null)
   const [playbackNote, setPlaybackNote] = useState<string | null>(null)
   const resolvedWorkRef = useRef<string | null>(null) // activeWork.id the current ytVideoId belongs to
+  const lyricsAbortRef = useRef<AbortController | null>(null)
+  // Read by the jam heartbeat and drift check, which run on intervals and must
+  // not be torn down and rebuilt four times a second.
+  const currentTimeRef = useRef(0)
+  const nowTitleRef = useRef('')
+  const nowArtistRef = useRef('')
+  const durationRef = useRef(0)
 
-  // YT Music search state
+  // Recording search state
   const [ytQuery, setYtQuery] = useState<string>('')
   const [ytResults, setYtResults] = useState<YtTrack[]>([])
   const [ytLoading, setYtLoading] = useState<boolean>(false)
   const [ytError, setYtError] = useState<string | null>(null)
-  const [ytLyrics, setYtLyrics] = useState<{ text: string | null; source: string | null; loading: boolean }>(
-    { text: null, source: null, loading: false }
-  )
-  const [ytSyncedLines, setYtSyncedLines] = useState<{time_ms: number, text: string}[]>([])
-  const syncedLyricsRef = useRef<HTMLDivElement | null>(null)
+  const [ytLyrics, setYtLyrics] = useState<{
+    text: string | null
+    source: string | null
+    loading: boolean
+    /** False when the matched LRC belongs to a noticeably different rendition. */
+    timingReliable: boolean
+    durationDelta: number | null
+    otherRenditions: { trackName: string; artistName: string; hasSynced: boolean }[]
+  }>({ text: null, source: null, loading: false, timingReliable: false, durationDelta: null, otherRenditions: [] })
+  // A one-tap correction, per recording, for when the timings run early/late.
+  const [lyricOffset, setLyricOffset] = useState<number>(0)
+  const [ytSyncedLines, setYtSyncedLines] = useState<SyncedLine[]>([])
 
-  // YT Music structured couplets + AI meaning
-  const [ytCouplets, setYtCouplets] = useState<
-    { index: number; line1: string; line2: string | null; combined_text: string; is_refrain: boolean }[]
-  >([])
-  const [selectedYtLine, setSelectedYtLine] = useState<
-    { index: number; line1: string; line2: string | null; combined_text: string; is_refrain: boolean } | null
-  >(null)
-  const [ytMeaning, setYtMeaning] = useState<{
-    translation: string; simple: string; detailed: string;
-    vocabulary: { term: string; meaning: string }[];
-    literary_devices: { device: string; english_name: string; explanation: string }[];
-    mood: string; cached: boolean;
-  } | null>(null)
+  // Structured couplets + meaning for a searched recording
+  const [ytCouplets, setYtCouplets] = useState<Couplet[]>([])
+  const [selectedYtLine, setSelectedYtLine] = useState<Couplet | null>(null)
+  const [ytMeaning, setYtMeaning] = useState<Meaning | null>(null)
   const [ytMeaningLoading, setYtMeaningLoading] = useState<boolean>(false)
+  const [ytMeaningFailed, setYtMeaningFailed] = useState<boolean>(false)
 
-  // User catalog state (persisted in localStorage)
+  // Personal collection (persisted in localStorage)
   const [userCatalogItems, setUserCatalogItems] = useState<UserCatalogEntry[]>(() => getUserCatalog())
 
-  // `isYT` == showing the pure YT-Music content panel (lyrics, no couplets).
-  const isYT = !!ytTrack
+  // Tonight's Mehfil — the session queue.
+  const [mehfil, setMehfil] = useState<MehfilItem[]>(() => readMehfil())
+  const [currentMehfilId, setCurrentMehfilId] = useState<string | null>(null)
+
+  // Mehfil Jam — listening together over a shared link.
+  const jam = useMehfilJam(API_BASE)
+  const isGuest = jam.role === 'guest'
+
+  // `isRecording` == showing a searched recording rather than a curated ghazal.
+  const isRecording = !!ytTrack
   const isStreaming = playbackSource === 'youtube'
 
-  // AI-generated meanings from the ML engine
-  const [aiMeaning, setAiMeaning] = useState<{
-    translation: string; simple: string; detailed: string;
-    vocabulary: { term: string; meaning: string }[];
-    literary_devices: { device: string; english_name: string; explanation: string }[];
-    mood: string; cached: boolean;
-  } | null>(null)
+  // Meaning from the ML engine
+  const [aiMeaning, setAiMeaning] = useState<Meaning | null>(null)
   const [aiLoading, setAiLoading] = useState<boolean>(false)
-  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiFailed, setAiFailed] = useState<boolean>(false)
+  const [meaningNonce, setMeaningNonce] = useState<number>(0)
+  // A sung line the catalogue has no couplet for, which the listener asked
+  // about. The meaning engine works on any text, so nothing has to be missing.
+  const [adhocLine, setAdhocLine] = useState<string | null>(null)
 
-  // Mehfil Mode (couplets synced to the singer) + timestamp authoring.
-  const [mehfilSync, setMehfilSync] = useState<boolean>(true)
-  const [stampMode, setStampMode] = useState<boolean>(false)
-  const [stamps, setStamps] = useState<Record<string, Record<string, number>>>({})
+  const [follow, setFollow] = useState<boolean>(true)
+  // Mukarrar — hold on the couplet being sung and hear it again. The single
+  // most useful thing you can do while learning a sher.
+  const [loopSher, setLoopSher] = useState<boolean>(false)
+  // The span is PINNED when the loop is switched on. Deriving it live from the
+  // active line meant it advanced with the playhead, so the end never arrived
+  // and nothing ever repeated.
+  const [loopSpan, setLoopSpan] = useState<[number, number] | null>(null)
+  // Couplet timings derived automatically from the recording's synced lyrics.
+  // Keyed workId -> lineId -> seconds. Nobody stamps anything by hand.
+  const [autoTimings, setAutoTimings] = useState<Record<string, Record<string, number>>>(
+    () => readAutoTimings()
+  )
+  const [timingState, setTimingState] = useState<'idle' | 'deriving' | 'done' | 'none'>('idle')
+  // Every moment a couplet is sung in THIS recording, in order. A ghazal
+  // returns to its lines constantly, so one timestamp per couplet describes
+  // only the opening minute of a seven-minute performance.
+  const [occurrences, setOccurrences] = useState<
+    { time: number; couplet: number | null; text: string }[]
+  >([])
 
-  // A couplet's start time: a user-authored stamp overrides the seed value.
-  const lineTime = (work: WorkData, line: LineData): number | null => {
-    const s = stamps[work.id]?.[line.id]
-    if (typeof s === 'number') return s
-    return typeof line.t === 'number' ? line.t : null
-  }
+  // A couplet's start time: a derived timing wins over the seeded value.
+  const lineTime = useCallback(
+    (work: WorkData, line: LineData): number | null => {
+      const derived = autoTimings[work.id]?.[line.id]
+      if (typeof derived === 'number') return derived
+      return typeof line.t === 'number' ? line.t : null
+    },
+    [autoTimings]
+  )
+  const workLineTime = useCallback(
+    (line: LineData) => lineTime(activeWork, line),
+    [lineTime, activeWork]
+  )
   const hasTimestamps = activeWork.lines.some((l) => lineTime(activeWork, l) !== null)
 
-  // Fetch AI-generated meaning when active couplet changes
+  // ---- Meaning ------------------------------------------------------------
   useEffect(() => {
-    if (isYT || !activeLine?.roman) return
+    const subject = adhocLine || activeLine?.roman
+    if (isRecording || !subject) return
     setAiMeaning(null)
-    setAiError(null)
+    setAiFailed(false)
     setAiLoading(true)
 
-    const depth = activeTab === 'LITERARY' ? 'detailed' : 'simple'
     fetch(`${API_BASE}/api/meaning`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        couplet: activeLine.roman,
+        couplet: subject,
         poet: activeWork.poet,
+        // The sung line may be Devanagari or Urdu; the engine reads either.
         language: 'roman',
-        depth,
       }),
     })
-      .then((res) => res.ok ? res.json() : Promise.reject(res.statusText))
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
       .then((data) => {
-        setAiMeaning(data)
+        const clean = sanitizeMeaning(data)
+        if (clean) {
+          setAiMeaning(clean)
+        } else {
+          // The service answered but had nothing showable. Detail stays here.
+          console.warn('[shama] meaning service returned no usable content:', data)
+          setAiFailed(true)
+        }
         setAiLoading(false)
       })
       .catch((err) => {
-        console.warn('AI meaning unavailable:', err)
-        setAiError('AI meaning unavailable')
+        // Logged for us, never surfaced to the reader.
+        console.warn('[shama] meaning request failed:', err)
+        setAiFailed(true)
         setAiLoading(false)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeLine?.id, activeTab])
+  }, [activeLine?.id, adhocLine, meaningNonce])
 
-  // The couplet the singer is currently on (last one whose start time has passed).
+  // Where the singer is right now, as an index into the performance timeline.
+  const currentOccurrence = useMemo(() => {
+    if (isRecording || occurrences.length === 0) return null
+    // +0.15s lead offsets the 250ms progress poll.
+    const t = currentTime + 0.15
+    let found: (typeof occurrences)[number] | null = null
+    for (const o of occurrences) {
+      if (o.time <= t) found = o
+      else break
+    }
+    if (!found) return null
+    // Let the last line go once the singing is clearly over, rather than
+    // leaving a couplet lit through several minutes of outro.
+    const last = occurrences[occurrences.length - 1]
+    if (found === last && duration > 0 && t - last.time > 25) return null
+    return found
+  }, [isRecording, occurrences, currentTime, duration])
+
+  // The couplet the singer is on. Falls back to the seeded timings when we
+  // have no occurrence timeline for this recording.
   const activeSyncLineId = useMemo(() => {
-    if (isYT) return null
+    if (isRecording) return null
+    if (occurrences.length > 0) {
+      const idx = currentOccurrence?.couplet
+      return idx != null ? activeWork.lines[idx]?.id ?? null : null
+    }
     let current: string | null = null
     for (const l of activeWork.lines) {
       const t = lineTime(activeWork, l)
@@ -169,7 +313,80 @@ export function App() {
     }
     return current
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTime, activeWork, stamps, isYT])
+  }, [currentTime, activeWork, autoTimings, isRecording, occurrences, currentOccurrence])
+
+  // A shared link (?mehfil=TOKEN) drops you straight into someone's mehfil.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const tok = new URLSearchParams(window.location.search).get('mehfil')
+    if (tok) jam.join(tok.toLowerCase())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Guest: follow whatever the host is playing.
+  useEffect(() => {
+    if (!isGuest || !jam.remote) return
+    const remote = jam.remote
+    if (remote.videoId && remote.videoId !== ytVideoId) {
+      // Adopt the host's recording. We only carry what the host broadcast —
+      // no metadata is invented for a track we haven't looked up.
+      setPlaybackSource('youtube')
+      setYtTrack({
+        videoId: remote.videoId,
+        title: remote.title || 'Now playing',
+        artist: remote.artist || '',
+        durationSeconds: remote.durationSeconds || undefined,
+      })
+      setYtVideoId(remote.videoId)
+      resolvedWorkRef.current = null
+      setSelectedYtLine(null)
+      setYtCouplets([])
+      fetchYtLyrics({
+        videoId: remote.videoId,
+        title: remote.title || '',
+        artist: remote.artist || '',
+        // Without this a guest's lyric match is duration-blind — the very
+        // defect that made lyrics pick the wrong recording in the first place.
+        durationSeconds: remote.durationSeconds || undefined,
+      })
+    }
+    if (!jam.needsGesture) setIsPlaying(!remote.paused)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGuest, jam.remote?.videoId, jam.remote?.paused, jam.remote?.updatedAt, jam.needsGesture])
+
+  // Guest: nudge back into line only when we have genuinely drifted. Seeking on
+  // every tick would stutter; ignoring drift lets the room fall apart.
+  useEffect(() => {
+    if (!isGuest || jam.needsGesture || !jam.remote || jam.remote.paused) return
+    const id = setInterval(() => {
+      const expected = jam.expectedPositionMs()
+      if (expected === null) return
+      const drift = Math.abs(expected - currentTimeRef.current * 1000)
+      if (drift > DRIFT_TOLERANCE_MS) seekTo(expected / 1000)
+    }, 2000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGuest, jam.needsGesture, jam.remote?.paused, jam.remote?.updatedAt])
+
+  // Host: broadcast the transport on every change plus a slow heartbeat, so a
+  // guest who joins mid-ghazal lands in the right place.
+  useEffect(() => {
+    if (jam.role !== 'host') return
+    const send = () =>
+      jam.publish({
+        videoId: ytVideoId,
+        positionMs: Math.round(currentTimeRef.current * 1000),
+        paused: !isPlaying,
+        title: nowTitleRef.current,
+        artist: nowArtistRef.current,
+        durationSeconds: Math.round(durationRef.current),
+        queue: mehfil.map((m) => ({ title: m.title, artist: m.artist })),
+      })
+    send()
+    const id = setInterval(send, HEARTBEAT_MS)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jam.role, jam.connected, ytVideoId, isPlaying, mehfil])
 
   // Fetch list of works on mount
   useEffect(() => {
@@ -184,13 +401,13 @@ export function App() {
             .map((item: any) => ({
               ...item,
               audioUrl: item.audio_url || item.audioUrl || '',
-              coverUrl: item.cover_url || item.coverUrl || ''
+              coverUrl: item.cover_url || item.coverUrl || '',
             }))
           if (extras.length > 0) setWorksList([...catalog, ...extras])
         }
       })
       .catch(() => {
-        console.log('[API_FALLBACK] Operating in local mock data mode.')
+        console.log('[shama] works API unreachable — using the local catalog.')
       })
   }, [])
 
@@ -199,8 +416,10 @@ export function App() {
   useEffect(() => {
     resolvedWorkRef.current = null
     setYtVideoId(null)
+    setResolveCandidates(null)
+    setAdhocLine(null)
+    setOccurrences([])
     setIsPlaying(false)
-    setPlaybackProgress(0)
     setCurrentTime(0)
     setDuration(0)
     setPlaybackNote(null)
@@ -208,7 +427,6 @@ export function App() {
       audioRef.current.pause()
       audioRef.current.src = activeWork.audioUrl || ''
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWork])
 
   // Sync Volume variables
@@ -218,35 +436,67 @@ export function App() {
     }
   }, [volume, isMuted])
 
-  // Load any locally-authored couplet timestamps once.
+  // Once a curated ghazal has a resolved recording and a known duration, work
+  // out its couplet timings from that recording's synced lyrics. This is what
+  // replaced asking the listener to tap every couplet.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('shama.stamps')
-      if (raw) setStamps(JSON.parse(raw))
-    } catch {
-      /* ignore */
-    }
-  }, [])
+    if (isRecording || !ytVideoId || !duration) return
+    if (resolvedWorkRef.current !== activeWork.id) return
+    void deriveTimings(activeWork, ytVideoId, duration)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWork.id, ytVideoId, duration, isRecording])
 
-  // Mehfil Mode: follow the singer — select + scroll the active couplet into view.
+  // Following the singer: keep the selected couplet on the one being sung.
+  // (The scrolling itself happens inside the sheet, not the window.)
   useEffect(() => {
-    if (!mehfilSync || !activeSyncLineId) return
+    if (!follow || !activeSyncLineId) return
     const line = activeWork.lines.find((l) => l.id === activeSyncLineId)
     if (line && line.id !== activeLine.id) setActiveLine(line)
-    if (typeof document !== 'undefined') {
-      document.getElementById(`sher-${activeSyncLineId}`)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
-      })
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSyncLineId, mehfilSync])
+  }, [activeSyncLineId, follow])
 
-  // Shared progress writer used by both the <audio> element and the YT player.
+  // ---- Tonight's Mehfil ----------------------------------------------------
+  const persistMehfil = (next: MehfilItem[]) => {
+    setMehfil(next)
+    writeMehfil(next)
+  }
+
+  const mehfilIndex = currentMehfilId ? mehfil.findIndex((m) => m.id === currentMehfilId) : -1
+
+  /** Put an entry in tonight's mehfil (if it isn't already) and make it current. */
+  const enqueue = (entry: Omit<MehfilItem, 'id'>) => {
+    const candidate = makeMehfilItem(entry)
+    const existing = mehfil.find((m) => sameItem(m, candidate))
+    if (existing) {
+      setCurrentMehfilId(existing.id)
+      return
+    }
+    persistMehfil([...mehfil, candidate])
+    setCurrentMehfilId(candidate.id)
+  }
+
+  const removeFromMehfil = (index: number) => {
+    const item = mehfil[index]
+    if (!item) return
+    if (item.id === currentMehfilId) setCurrentMehfilId(null)
+    persistMehfil(mehfil.filter((_, i) => i !== index))
+  }
+
+  const reorderMehfil = (from: number, to: number) => {
+    persistMehfil(moveItem(mehfil, from, to))
+  }
+
+  const playNextInMehfil = (index: number) => {
+    if (mehfilIndex < 0) return
+    persistMehfil(moveItem(mehfil, index, index < mehfilIndex ? mehfilIndex : mehfilIndex + 1))
+  }
+
+  // ---- Playback engine -----------------------------------------------------
   const updateProgress = (current: number, dur: number) => {
+    currentTimeRef.current = current
+    durationRef.current = dur
     setCurrentTime(current)
     setDuration(dur)
-    setPlaybackProgress(dur > 0 ? (current / dur) * 100 : 0)
   }
 
   const seekTo = (sec: number) => {
@@ -254,123 +504,59 @@ export function App() {
     else if (audioRef.current) audioRef.current.currentTime = sec
   }
 
-  // ---- Timestamp authoring (tap-to-sync) -----------------------------------
-  const persistStamps = (next: Record<string, Record<string, number>>) => {
-    try {
-      localStorage.setItem('shama.stamps', JSON.stringify(next))
-    } catch {
-      /* ignore */
-    }
-  }
-  const stampCouplet = (lineId: string) => {
-    setStamps((prev) => {
-      const next = {
-        ...prev,
-        [activeWork.id]: {
-          ...(prev[activeWork.id] || {}),
-          [lineId]: Math.max(0, Math.round(currentTime * 10) / 10)
-        }
-      }
-      persistStamps(next)
-      return next
-    })
-  }
-  const clearStamps = () => {
-    setStamps((prev) => {
-      const next = { ...prev }
-      delete next[activeWork.id]
-      persistStamps(next)
-      return next
-    })
-  }
-  const exportStamps = () => {
-    const out = activeWork.lines.map((l) => ({ id: l.id, t: lineTime(activeWork, l) }))
-    const json = JSON.stringify(out, null, 2)
-    try {
-      navigator.clipboard?.writeText(json)
-    } catch {
-      /* ignore */
-    }
-    if (typeof document !== 'undefined') {
-      const blob = new Blob([json], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${activeWork.id}-timestamps.json`
-      a.click()
-      URL.revokeObjectURL(url)
-    }
-  }
-  const mukarrar = () => {
-    const line = activeWork.lines.find((l) => l.id === activeLine.id) || activeWork.lines[0]
-    const t = lineTime(activeWork, line)
-    if (t !== null) {
-      seekTo(t)
-      if (!isPlaying) handlePlayPause()
-    }
-  }
-
-  // ---- User Catalog (Add to My Catalog) ------------------------------------
-  const toggleCatalogEntry = () => {
-    if (!ytTrack) return
-    if (isInCatalog(ytTrack.videoId)) {
-      // Remove it
-      const entry = userCatalogItems.find((e) => e.videoId === ytTrack.videoId)
-      if (entry) {
-        removeFromCatalog(entry.id)
-        setUserCatalogItems(getUserCatalog())
-      }
-    } else {
-      // Add it
-      addToCatalog({
-        videoId: ytTrack.videoId,
-        title: ytTrack.title,
-        artist: ytTrack.artist,
-        album: ytTrack.album,
-        thumbnail: ytTrack.coverUrl || ytTrack.thumbnail,
-      })
-      setUserCatalogItems(getUserCatalog())
-    }
-  }
-
-  const removeUserCatalogEntry = (id: string) => {
-    removeFromCatalog(id)
-    setUserCatalogItems(getUserCatalog())
-  }
-
-  const playFromUserCatalog = (entry: UserCatalogEntry) => {
-    const track: YtTrack = {
-      videoId: entry.videoId,
-      title: entry.title,
-      artist: entry.artist,
-      album: entry.album,
-      thumbnail: entry.thumbnail,
-      coverUrl: entry.thumbnail,
-    }
-    playYtTrack(track)
-  }
-
-  // Resolve a YouTube video for a curated work (cached per work id).
+  // Resolve a YouTube recording for a curated work (cached per work id).
+  //
+  // Search ranks by relevance, not by "is this the song you asked for", so
+  // taking result #1 unchecked used to play a different ghazal entirely — and
+  // then, correctly, find no lyrics for it. We now only auto-play a confident
+  // match and otherwise let the listener choose.
   const ensureCuratedVideo = async (work: WorkData): Promise<string | null> => {
     if (ytVideoId && resolvedWorkRef.current === work.id) return ytVideoId
     setResolving(true)
+    setResolveCandidates(null)
     try {
-      const q = (work.ytQuery || `${work.title} ${work.artist}`).trim()
-      const res = await fetch(`${API_BASE}/api/yt/search?q=${encodeURIComponent(q)}&limit=1`)
+      const params = new URLSearchParams({ title: work.title, artist: work.artist })
+      const res = await fetch(`${API_BASE}/api/yt/resolve?${params.toString()}`)
+      if (!res.ok) throw new Error(String(res.status))
       const data = await res.json()
-      const vid: string | null = data.results?.[0]?.videoId || null
-      resolvedWorkRef.current = vid ? work.id : null
-      setYtVideoId(vid)
-      return vid
-    } catch {
+
+      if (data.best?.videoId) {
+        resolvedWorkRef.current = work.id
+        setYtVideoId(data.best.videoId)
+        return data.best.videoId
+      }
+
+      const candidates: YtTrack[] = (data.candidates || []).slice(0, 5).map((r: any) => ({
+        videoId: r.videoId,
+        title: r.title,
+        artist: r.artist,
+        durationSeconds: r.durationSeconds,
+        duration: r.duration,
+      }))
+      resolvedWorkRef.current = null
+      setYtVideoId(null)
+      setResolveCandidates(candidates.length ? candidates : [])
+      return null
+    } catch (err) {
+      console.warn('[shama] could not resolve a recording for', work.title, err)
       return null
     } finally {
       setResolving(false)
     }
   }
 
+  /** The listener picked which recording this ghazal is. */
+  const playCandidate = (track: YtTrack) => {
+    setResolveCandidates(null)
+    resolvedWorkRef.current = activeWork.id
+    setPlaybackSource('youtube')
+    setYtVideoId(track.videoId)
+    setPlaybackNote(null)
+    setIsPlaying(true)
+  }
+
   const handlePlayPause = async () => {
-    // Pure YT-search track: flip intent, the IFrame player reports the real state.
+    // A searched recording: flip intent, the IFrame player reports the real state.
     if (ytTrack) {
       setIsPlaying((prev) => !prev)
       return
@@ -398,19 +584,189 @@ export function App() {
         await audioRef.current.play()
         setIsPlaying(true)
       } catch (err) {
-        console.warn('[SHAMA] No playable source for', activeWork.title, (err as any)?.message)
-        setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+        console.warn('[shama] no playable source for', activeWork.title, (err as any)?.message)
+        setPlaybackNote(COPY.noRecording)
       }
     } else {
-      setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+      setPlaybackNote(COPY.noRecording)
     }
   }
 
-  // ---- YouTube Music -------------------------------------------------------
-  const runYtSearch = (e?: React.FormEvent) => {
+  // ---- Curated works -------------------------------------------------------
+  const resolveWork = async (work: any): Promise<WorkData> => {
+    if (work.lines && work.lines.length > 0) return work as WorkData
+    try {
+      const res = await fetch(`${API_BASE}/api/works/${work.id}`)
+      const data = await res.json()
+      if (data && data.lines && data.lines.length > 0) {
+        const formattedLines = data.lines.map((l: any) => ({
+          ...l,
+          englishText: l.english_text || l.englishText,
+        }))
+        const localMatch = catalog.find((c) => c.id === work.id)
+        return {
+          ...data,
+          audioUrl: data.audio_url || data.audioUrl || (localMatch ? localMatch.audioUrl : ''),
+          coverUrl: data.cover_url || data.coverUrl || (localMatch ? localMatch.coverUrl : ''),
+          lines: formattedLines,
+        }
+      }
+    } catch {
+      /* fall through to the local catalog */
+    }
+    return (catalog.find((w) => w.id === work.id) || work) as WorkData
+  }
+
+  const openWork = async (work: any, play = false, alreadyQueued = false) => {
+    // Opening a curated ghazal drops any searched recording; the activeWork
+    // effect then resets the transport.
+    setYtTrack(null)
+    const resolved = await resolveWork(work)
+    setActiveWork(resolved)
+    setActiveLine(resolved.lines[0])
+    // Stepping through the mehfil is already pointed at its entry — enqueueing
+    // again could append a duplicate if the resolved id ever drifts.
+    if (!alreadyQueued) {
+      enqueue({
+        kind: 'work',
+        workId: resolved.id,
+        title: resolved.title,
+        artist: resolved.artist,
+        poet: resolved.poet,
+        thumbnail: resolved.coverUrl,
+      })
+    }
+    setCurrentView('LISTEN')
+    if (!play) return
+    setPlaybackSource('youtube')
+    // ensureCuratedVideo goes to the network, so the activeWork reset effect has
+    // already run by the time we ask for playback.
+    const vid = await ensureCuratedVideo(resolved)
+    if (vid) setIsPlaying(true)
+    else if (!resolveCandidates) setPlaybackNote(COPY.noRecording)
+  }
+
+  const handleLineSelect = (line: LineData) => {
+    setAdhocLine(null)
+    setActiveLine(line)
+    const t = workLineTime(line)
+    if (t !== null) seekTo(t)
+    stopSpeaking()
+  }
+
+  // ---- Automatic couplet timings -----------------------------------------
+  // Fetch the recording's synced lyrics and align the catalogue's couplets to
+  // them. Runs once per (work, recording) and is remembered locally.
+  const deriveTimings = useCallback(
+    async (work: WorkData, videoId: string, durationSeconds: number) => {
+      const cacheKey = `${work.id}:${videoId}`
+      const already = readAutoTimings()
+      const cachedTimings = already[work.id] && already.__keys?.[work.id] === cacheKey
+      // Only short-circuit once we ALSO hold a readiness measurement; otherwise
+      // a work aligned before readiness existed would never be measured.
+      if (cachedTimings && readReadiness()[work.id]) {
+        setAutoTimings(already)
+        setOccurrences(already.__occurrences?.[cacheKey] || [])
+        setTimingState('done')
+        return
+      }
+      setTimingState('deriving')
+      setOccurrences([])
+      try {
+        const params = new URLSearchParams({ title: work.title, artist: work.artist })
+        if (durationSeconds) params.set('duration', String(Math.round(durationSeconds)))
+        const lyricRes = await fetch(`${API_BASE}/api/yt/lyrics/search?${params.toString()}`)
+        if (!lyricRes.ok) throw new Error(`lyrics ${lyricRes.status}`)
+        const lyrics = await lyricRes.json()
+        const lines = lyrics.syncedLines || []
+
+        const record = (coverage: number) => {
+          const value: Readiness = {
+            hasLyrics: !!lyrics.hasLyrics,
+            hasSynced: lines.length > 0,
+            timingReliable: !!lyrics.timingReliable,
+            coverage,
+            couplets: work.lines.length,
+            checkedAt: Date.now(),
+          }
+          writeReadiness(work.id, value)
+          setReadiness((prev) => ({ ...prev, [work.id]: value }))
+        }
+
+        if (!lines.length) {
+          record(0)
+          setTimingState('none')
+          return
+        }
+        const alignRes = await fetch(`${API_BASE}/api/align-couplets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            // Every script we hold, so the matcher can work in whichever one
+            // the lyric source happens to use (usually Devanagari).
+            couplets: work.lines.map((l) => [l.hindi, l.urdu, l.roman].filter(Boolean)),
+            lines,
+          }),
+        })
+        if (!alignRes.ok) throw new Error(`align ${alignRes.status}`)
+        const { aligned, matched, occurrences: occ, coverage } = await alignRes.json()
+        setOccurrences(Array.isArray(occ) ? occ : [])
+        record(typeof coverage === 'number' ? coverage : 0)
+        if (!matched) {
+          setTimingState('none')
+          return
+        }
+        const map: Record<string, number> = {}
+        for (const a of aligned as { index: number; time: number | null }[]) {
+          const line = work.lines[a.index]
+          if (line && a.time !== null) map[line.id] = a.time
+        }
+        const next = { ...already, [work.id]: map }
+        next.__keys = { ...(already.__keys || {}), [work.id]: cacheKey }
+        next.__occurrences = { ...(already.__occurrences || {}), [cacheKey]: occ || [] }
+        writeAutoTimings(next)
+        setAutoTimings(next)
+        setTimingState('done')
+      } catch (err) {
+        console.warn('[shama] could not derive couplet timings:', err)
+        setTimingState('none')
+      }
+    },
+    []
+  )
+
+  // ---- Personal collection -------------------------------------------------
+  const toggleCollected = () => {
+    if (!ytTrack) return
+    if (isInCatalog(ytTrack.videoId)) {
+      const entry = userCatalogItems.find((e) => e.videoId === ytTrack.videoId)
+      if (entry) {
+        removeFromCatalog(entry.id)
+        setUserCatalogItems(getUserCatalog())
+      }
+    } else {
+      addToCatalog({
+        videoId: ytTrack.videoId,
+        title: ytTrack.title,
+        artist: ytTrack.artist,
+        album: ytTrack.album,
+        thumbnail: ytTrack.coverUrl || ytTrack.thumbnail,
+      })
+      setUserCatalogItems(getUserCatalog())
+    }
+  }
+
+  const removeCollected = (id: string) => {
+    removeFromCatalog(id)
+    setUserCatalogItems(getUserCatalog())
+  }
+
+  // ---- Recordings ----------------------------------------------------------
+  const runSearch = (e?: React.FormEvent, term?: string) => {
     if (e) e.preventDefault()
-    const q = ytQuery.trim()
+    const q = (term ?? ytQuery).trim()
     if (!q) return
+    setYtQuery(q)
     setYtLoading(true)
     setYtError(null)
     fetch(`${API_BASE}/api/yt/search?q=${encodeURIComponent(q)}&limit=24`)
@@ -422,49 +778,89 @@ export function App() {
           artist: r.artist || (r.artists ? r.artists.join(', ') : 'Unknown Artist'),
           album: r.album,
           duration: r.duration,
+          durationSeconds: r.durationSeconds,
           thumbnail: r.thumbnail,
-          coverUrl: r.thumbnail ? `${API_BASE}/api/yt/thumb?u=${encodeURIComponent(r.thumbnail)}` : undefined
+          coverUrl: r.thumbnail
+            ? `${API_BASE}/api/yt/thumb?u=${encodeURIComponent(r.thumbnail)}`
+            : undefined,
         }))
         setYtResults(results)
-        if (results.length === 0) setYtError(data.error || 'No results found for that search.')
+        if (results.length === 0) {
+          if (data.error) console.warn('[shama] search returned an error:', data.error)
+          setYtError(COPY.noResults)
+        }
         setYtLoading(false)
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn('[shama] recordings search unreachable:', err)
         setYtResults([])
-        setYtError('YT Music service is unreachable. Start it with: cd ytmusic-service && python main.py')
+        setYtError(COPY.searchDown)
         setYtLoading(false)
       })
   }
 
-  const fetchYtLyrics = (videoId: string, title?: string, artist?: string) => {
-    setYtLyrics({ text: null, source: null, loading: true })
+  const fetchYtLyrics = (track: YtTrack) => {
+    const { videoId, title, artist, album, durationSeconds } = track
+
+    // Cancel any in-flight lookup: without this, switching tracks quickly let
+    // the slower response land last and paint track A's lyrics over track B.
+    lyricsAbortRef.current?.abort()
+    const controller = new AbortController()
+    lyricsAbortRef.current = controller
+
+    setYtLyrics({ text: null, source: null, loading: true, timingReliable: false, durationDelta: null, otherRenditions: [] })
     setYtSyncedLines([])
+    setLyricOffset(readLyricOffset(videoId))
+
+    const settle = (patch: Partial<{ text: string | null; source: string | null; timingReliable: boolean; durationDelta: number | null; otherRenditions: { trackName: string; artistName: string; hasSynced: boolean }[] }>) =>
+      setYtLyrics((prev) => ({ ...prev, loading: false, ...patch }))
 
     const fallbackToYouTube = () => {
-      fetch(`${API_BASE}/api/yt/lyrics/${videoId}`)
-        .then((res) => res.json())
-        .then((data) => {
-          setYtLyrics({ text: data.lyrics || null, source: data.source || null, loading: false })
+      fetch(`${API_BASE}/api/yt/lyrics/${videoId}`, { signal: controller.signal })
+        .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+        .then((data) => settle({ text: data.lyrics || null, source: data.source || null }))
+        .catch((err) => {
+          if (controller.signal.aborted) return
+          console.warn('[shama] lyrics lookup failed:', err)
+          settle({ text: null, source: null })
         })
-        .catch(() => setYtLyrics({ text: null, source: null, loading: false }))
     }
 
     if (title || artist) {
       const params = new URLSearchParams()
       if (title) params.set('title', title)
       if (artist) params.set('artist', artist)
+      // Duration and album are what let the server tell renditions apart.
+      if (durationSeconds) params.set('duration', String(durationSeconds))
+      if (album) params.set('album', album)
 
-      fetch(`${API_BASE}/api/yt/lyrics/search?${params.toString()}`)
-        .then((res) => res.json())
+      fetch(`${API_BASE}/api/yt/lyrics/search?${params.toString()}`, { signal: controller.signal })
+        .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
         .then((data) => {
+          if (controller.signal.aborted) return
+          if (!data.hasLyrics && (data.otherRenditions || []).length) {
+            settle({ text: null, source: null, otherRenditions: data.otherRenditions })
+            return
+          }
           if (data.hasLyrics) {
-            setYtLyrics({ text: data.lyrics || null, source: data.source || 'lrclib', loading: false })
+            if (data.syncParseFailed) {
+              console.warn('[shama] synced lyrics existed but could not be parsed')
+            }
+            settle({
+              text: data.lyrics || null,
+              source: data.source || 'lrclib',
+              timingReliable: !!data.timingReliable,
+              durationDelta: data.durationDelta ?? null,
+              otherRenditions: data.otherRenditions || [],
+            })
             setYtSyncedLines(data.syncedLines || [])
           } else {
             fallbackToYouTube()
           }
         })
-        .catch(() => {
+        .catch((err) => {
+          if (controller.signal.aborted) return
+          console.warn('[shama] lyrics search failed:', err)
           fallbackToYouTube()
         })
     } else {
@@ -472,7 +868,7 @@ export function App() {
     }
   }
 
-  // When ytLyrics.text is fetched, split into structured couplets.
+  // When lyrics arrive, split them into structured couplets.
   useEffect(() => {
     if (!ytLyrics.text) {
       setYtCouplets([])
@@ -489,46 +885,57 @@ export function App() {
         artist: ytTrack?.artist || '',
       }),
     })
-      .then((res) => res.ok ? res.json() : Promise.reject(res.statusText))
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
       .then((data) => {
         setYtCouplets(data.couplets || [])
       })
       .catch((err) => {
-        console.warn('split-lyrics unavailable, falling back to raw lines:', err)
+        console.warn('[shama] couplet splitting unavailable, showing raw lines:', err)
         setYtCouplets([])
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ytLyrics.text])
 
-  // Fetch AI meaning when a YT couplet is selected or tab changes.
+  // Meaning for whatever line of a searched recording is under discussion.
+  //
+  // This used to key off `selectedYtLine`, which only the couplet branch ever
+  // sets — so a recording with SYNCED lyrics (the common, better case) had no
+  // way to ever fill the panel. `adhocLine` covers both branches.
   useEffect(() => {
-    if (!selectedYtLine) return
+    const subject = adhocLine || selectedYtLine?.combined_text
+    if (!isRecording || !subject) return
     setYtMeaning(null)
+    setYtMeaningFailed(false)
     setYtMeaningLoading(true)
-    const depth = activeTab === 'LITERARY' ? 'detailed' : 'simple'
     fetch(`${API_BASE}/api/meaning`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        couplet: selectedYtLine.combined_text,
+        couplet: subject,
         poet: ytTrack?.artist || '',
         language: 'roman',
-        depth,
       }),
     })
-      .then((res) => res.ok ? res.json() : Promise.reject(res.statusText))
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
       .then((data) => {
-        setYtMeaning(data)
+        const clean = sanitizeMeaning(data)
+        if (clean) {
+          setYtMeaning(clean)
+        } else {
+          console.warn('[shama] meaning service returned no usable content:', data)
+          setYtMeaningFailed(true)
+        }
         setYtMeaningLoading(false)
       })
       .catch((err) => {
-        console.warn('AI meaning unavailable for YT couplet:', err)
+        console.warn('[shama] meaning request failed for the selected couplet:', err)
+        setYtMeaningFailed(true)
         setYtMeaningLoading(false)
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedYtLine?.index, activeTab])
+  }, [isRecording, adhocLine, selectedYtLine?.index, meaningNonce])
 
-  const playYtTrack = (track: YtTrack) => {
+  const playRecording = (track: YtTrack) => {
     // Stop the archive audio engine and hand playback to YouTube.
     if (audioRef.current) audioRef.current.pause()
     setPlaybackSource('youtube')
@@ -538,98 +945,80 @@ export function App() {
     setPlaybackNote(null)
     setCurrentTime(0)
     setDuration(0)
-    setPlaybackProgress(0)
     setIsPlaying(true)
-    setCurrentView('LISTENING')
-    fetchYtLyrics(track.videoId, track.title, track.artist)
+    setCurrentView('LISTEN')
+    fetchYtLyrics(track)
     setSelectedYtLine(null)
     setYtMeaning(null)
     setYtCouplets([])
-    if (isSpeaking) {
-      window.speechSynthesis.cancel()
-      setIsSpeaking(false)
-    }
+    enqueue({
+      kind: 'recording',
+      videoId: track.videoId,
+      title: track.title,
+      artist: track.artist,
+      thumbnail: track.coverUrl || track.thumbnail,
+    })
+    stopSpeaking()
   }
 
-  const handleWorkSelect = (work: any) => {
-    // Selecting a curated work drops any pure-YT selection; the activeWork
-    // effect then resets the transport (playback restarts on demand).
-    setYtTrack(null)
-    if (work.lines && work.lines.length > 0) {
-      setActiveWork(work)
-      setActiveLine(work.lines[0])
+  const playCollected = (entry: UserCatalogEntry) => {
+    playRecording({
+      videoId: entry.videoId,
+      title: entry.title,
+      artist: entry.artist,
+      album: entry.album,
+      thumbnail: entry.thumbnail,
+      coverUrl: entry.thumbnail,
+    })
+  }
+
+  const playMehfilAt = (index: number) => {
+    const item = mehfil[index]
+    if (!item) return
+    setCurrentMehfilId(item.id)
+    if (item.kind === 'work') {
+      const work = worksList.find((w) => w.id === item.workId) || catalog.find((w) => w.id === item.workId)
+      if (work) void openWork(work, true, true)
       return
     }
-
-    // Fetch full details from API
-    fetch(`${API_BASE}/api/works/${work.id}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.lines && data.lines.length > 0) {
-          const formattedLines = data.lines.map((l: any) => ({
-            ...l,
-            englishText: l.english_text || l.englishText
-          }))
-          const localMatch = catalog.find((c) => c.id === work.id)
-          const mergedWork = {
-            ...data,
-            audioUrl: data.audio_url || data.audioUrl || (localMatch ? localMatch.audioUrl : ''),
-            coverUrl: data.cover_url || data.coverUrl || (localMatch ? localMatch.coverUrl : ''),
-            lines: formattedLines
-          }
-          setActiveWork(mergedWork)
-          setActiveLine(formattedLines[0])
-        } else {
-          loadLocalFallback(work.id)
-        }
+    if (item.videoId) {
+      playRecording({
+        videoId: item.videoId,
+        title: item.title,
+        artist: item.artist,
+        thumbnail: item.thumbnail,
+        coverUrl: item.thumbnail,
       })
-      .catch(() => {
-        loadLocalFallback(work.id)
-      })
-  }
-
-  const loadLocalFallback = (id: string) => {
-    const local = catalog.find((w) => w.id === id)
-    if (local) {
-      setActiveWork(local)
-      setActiveLine(local.lines[0])
     }
   }
 
-  const handleLineSelect = (line: LineData) => {
-    setActiveLine(line)
-    if (isSpeaking) {
-      window.speechSynthesis.cancel()
-      setIsSpeaking(false)
-    }
+  const hasPrev = mehfilIndex > 0
+  const hasNext = mehfilIndex > -1 && mehfilIndex < mehfil.length - 1
+  const goPrev = () => hasPrev && playMehfilAt(mehfilIndex - 1)
+  const goNext = () => hasNext && playMehfilAt(mehfilIndex + 1)
+
+  const onTrackEnded = () => {
+    setIsPlaying(false)
+    setCurrentTime(0)
+    if (hasNext) playMehfilAt(mehfilIndex + 1)
   }
 
-  const toggleSpeech = async () => {
-    if (isSpeaking) {
-      // Stop any playing audio
-      window.speechSynthesis.cancel()
-      const ttsAudio = document.getElementById('shama-tts-audio') as HTMLAudioElement | null
-      if (ttsAudio) { ttsAudio.pause(); ttsAudio.currentTime = 0 }
-      setIsSpeaking(false)
-      return
+  // ---- Voice ---------------------------------------------------------------
+  const stopSpeaking = () => {
+    if (typeof window === 'undefined') return
+    window.speechSynthesis?.cancel()
+    const ttsAudio = document.getElementById('shama-tts-audio') as HTMLAudioElement | null
+    if (ttsAudio) {
+      ttsAudio.pause()
+      ttsAudio.currentTime = 0
     }
+    setIsSpeaking(false)
+  }
 
-    const textToSpeak = isYT
-      ? (selectedYtLine
-          ? (activeTab === 'SIMPLE' ? (ytMeaning?.simple || selectedYtLine.combined_text)
-             : activeTab === 'LITERARY' ? (ytMeaning?.detailed || selectedYtLine.combined_text)
-             : (ytMeaning?.vocabulary || []).map((v) => `${v.term} means ${v.meaning}`).join('. ') || selectedYtLine.combined_text)
-          : ytLyrics.text || `Now playing ${ytTrack?.title} by ${ytTrack?.artist} from YouTube Music.`)
-      : activeTab === 'SIMPLE'
-        ? (aiMeaning?.simple || activeLine.simple)
-        : activeTab === 'LITERARY'
-        ? (aiMeaning?.detailed || activeLine.detailed)
-        : (aiMeaning?.vocabulary || activeLine.vocabulary).map((v) => `${v.term} means ${v.meaning}`).join('. ')
-
+  const speak = async (textToSpeak: string) => {
+    if (!textToSpeak) return
     setIsSpeaking(true)
-
     try {
-      // Try ElevenLabs via our backend
       const res = await fetch(`${API_BASE}/api/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -638,7 +1027,6 @@ export function App() {
       const data = await res.json()
 
       if (res.ok && data.audio_url && !data.use_browser_tts) {
-        // Play ElevenLabs audio
         let ttsAudio = document.getElementById('shama-tts-audio') as HTMLAudioElement | null
         if (!ttsAudio) {
           ttsAudio = document.createElement('audio')
@@ -647,17 +1035,15 @@ export function App() {
         }
         ttsAudio.src = data.audio_url
         ttsAudio.onended = () => setIsSpeaking(false)
-        ttsAudio.onerror = () => { setIsSpeaking(false) }
+        ttsAudio.onerror = () => setIsSpeaking(false)
         await ttsAudio.play()
         return
       }
-    } catch (e) {
-      // ElevenLabs unavailable, fall through to browser TTS
-      console.warn('ElevenLabs TTS unavailable, using browser fallback:', e)
+    } catch (err) {
+      console.warn('[shama] voice service unavailable, using the browser voice:', err)
     }
 
-    // Fallback: browser speech synthesis
-    if ('speechSynthesis' in window) {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(textToSpeak)
       utterance.rate = 0.9
       utterance.onend = () => setIsSpeaking(false)
@@ -667,63 +1053,223 @@ export function App() {
     }
   }
 
-  const renderScriptText = (line: LineData) => {
-    switch (scriptMode) {
-      case 'URDU':
-        return line.urdu
-      case 'HINDI':
-        return line.hindi
-      case 'ROMAN':
-        return line.roman
-      case 'ENGLISH':
-        return line.englishText
-      default:
-        return line.urdu
-    }
+  const pronounce = (term: string) => {
+    stopSpeaking()
+    void speak(term)
   }
 
-  // Format Time Helper (MM:SS)
+  // ---- Derived view data ---------------------------------------------------
   const formatTime = (time: number) => {
-    if (isNaN(time)) return '00:00'
+    if (!isFinite(time) || isNaN(time)) return '0:00'
     const minutes = Math.floor(time / 60)
     const seconds = Math.floor(time % 60)
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
 
-  const filteredCatalog = worksList.filter(
-    (work) =>
-      work.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      work.poet.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      work.artist.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  const nowTitle = isRecording ? ytTrack!.title : activeWork.title
+  const nowArtist = isRecording ? ytTrack!.artist : activeWork.artist
+  const nowCover = isRecording ? ytTrack!.coverUrl : activeWork.coverUrl
+  nowTitleRef.current = nowTitle
+  nowArtistRef.current = nowArtist
 
-  const activateCuratorSelection = async (workId: string) => {
-    const matched = worksList.find((w) => w.id === workId)
-    if (!matched) return
-    handleWorkSelect(matched)
-    setCurrentView('LISTENING')
-    // Resolve this curated work on YouTube and start playing.
-    const work = (matched.lines && matched.lines.length > 0
-      ? matched
-      : catalog.find((c) => c.id === workId)) as WorkData | undefined
-    if (!work) return
-    setPlaybackSource('youtube')
-    const vid = await ensureCuratedVideo(work)
-    if (vid) setIsPlaying(true)
-    else setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+  const activeSyncedIndex = useMemo(() => {
+    if (!isRecording || ytSyncedLines.length === 0) return -1
+    // +150ms lead matches the curated path and offsets the 250ms poll, which
+    // otherwise makes every highlight land systematically late.
+    const ms = (currentTime - lyricOffset) * 1000 + 150
+    let idx = -1
+    for (let i = 0; i < ytSyncedLines.length; i++) {
+      if (ytSyncedLines[i].time_ms <= ms) idx = i
+      else break
+    }
+    // Release the final line instead of leaving it "singing" through the whole
+    // outro: treat it as over once it has run longer than any other line.
+    if (idx === ytSyncedLines.length - 1 && idx > 0 && duration > 0) {
+      const started = ytSyncedLines[idx].time_ms
+      const longest = ytSyncedLines.reduce((max, l, i) =>
+        i === 0 ? max : Math.max(max, l.time_ms - ytSyncedLines[i - 1].time_ms), 0)
+      if (ms - started > Math.max(longest * 1.5, 15000)) return -1
+    }
+    return idx
+  }, [isRecording, ytSyncedLines, currentTime, lyricOffset, duration])
+
+  /** [start, end) of whatever is being sung right now, if we know it. */
+  const currentSpan = useMemo((): [number, number] | null => {
+    if (isRecording) {
+      if (activeSyncedIndex < 0 || ytSyncedLines.length === 0) return null
+      const start = ytSyncedLines[activeSyncedIndex].time_ms / 1000 + lyricOffset
+      const next = ytSyncedLines[activeSyncedIndex + 1]
+      return [start, next ? next.time_ms / 1000 + lyricOffset : duration || start + 30]
+    }
+    if (!currentOccurrence || occurrences.length === 0) return null
+    const i = occurrences.indexOf(currentOccurrence)
+    const next = occurrences[i + 1]
+    return [currentOccurrence.time, next ? next.time : duration || currentOccurrence.time + 30]
+  }, [isRecording, activeSyncedIndex, ytSyncedLines, lyricOffset, currentOccurrence, occurrences, duration])
+
+  // Hold on this sher until the listener has it.
+  useEffect(() => {
+    if (!loopSher || !loopSpan) return
+    const [start, end] = loopSpan
+    // Also catch a manual seek out of the span: the loop should follow the
+    // listener rather than yanking them back from wherever they went.
+    if (currentTime >= end - 0.05 || currentTime < start - 1.5) seekTo(start)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loopSher, loopSpan, currentTime])
+
+  const toggleLoop = () => {
+    setLoopSher((on) => {
+      if (on) {
+        setLoopSpan(null)
+        return false
+      }
+      if (!currentSpan) return false
+      setLoopSpan(currentSpan)
+      return true
+    })
   }
 
-  // Now-playing metadata resolves from whichever engine is active.
-  const nowTitle = isYT ? ytTrack!.title : activeWork.title
-  const nowArtist = isYT ? ytTrack!.artist : activeWork.artist
-  const nowCover = isYT ? ytTrack!.coverUrl : activeWork.coverUrl
+  // A new recording or ghazal ends the repeat.
+  useEffect(() => {
+    setLoopSher(false)
+    setLoopSpan(null)
+  }, [activeWork.id, ytVideoId])
 
+  // The couplet that carries the stage.
+  const heroCouplet = useMemo(() => {
+    if (!isRecording) {
+      // Sung right now, but not a couplet we hold: show the words anyway
+      // rather than going blank for minutes at a time.
+      if (currentOccurrence && currentOccurrence.couplet === null) {
+        const text = currentOccurrence.text
+        return scriptOf(text) === 'urdu' ? { urdu: text } : { roman: text }
+      }
+      return {
+        urdu: activeLine.urdu,
+        roman: activeLine.transliteration || activeLine.roman,
+        english: activeLine.translation,
+      }
+    }
+    if (activeSyncedIndex > -1) {
+      return { roman: ytSyncedLines[activeSyncedIndex]?.text?.trim() || '' }
+    }
+    if (selectedYtLine) return { roman: selectedYtLine.combined_text }
+    return null
+  }, [isRecording, activeLine, activeSyncedIndex, ytSyncedLines, selectedYtLine, currentOccurrence])
+
+  // What the hero says when no couplet is current — never claim the words are
+  // missing while they are sitting in the sheet below (§22, §25).
+  const heroFallback = useMemo(() => {
+    if (!isRecording) return ''
+    if (ytLyrics.loading) return 'Preparing the mehfil…'
+    if (ytSyncedLines.length > 0 || ytCouplets.length > 0 || ytLyrics.text) {
+      return 'Choose a couplet below to bring it up here.'
+    }
+    return 'Lyrics aren’t available for this recording.'
+  }, [isRecording, ytLyrics.loading, ytLyrics.text, ytSyncedLines.length, ytCouplets.length])
+
+  // Sher boundaries for the timeline — real timings only (§14, §22).
+  const timelineMarkers: TimelineMarker[] = useMemo(() => {
+    if (isRecording) {
+      return ytSyncedLines.length > 4 && ytSyncedLines.length < 80
+        ? ytSyncedLines.map((l, i) => ({ id: `s${i}`, label: '', t: l.time_ms / 1000 }))
+        : []
+    }
+    // Every return to a couplet, so the ticks describe the whole recording
+    // rather than bunching into its opening minute.
+    if (occurrences.length > 0) {
+      return occurrences
+        .filter((o) => o.couplet !== null)
+        .map((o, i) => ({ id: `o${i}`, label: `Sher ${(o.couplet ?? 0) + 1}`, t: o.time }))
+    }
+    return activeWork.lines
+      .map((l) => ({ id: l.id, t: lineTime(activeWork, l) }))
+      .filter((m): m is { id: string; t: number } => m.t !== null)
+      .map((m, i) => ({ id: m.id, label: `Sher ${i + 1}`, t: m.t }))
+  }, [isRecording, ytSyncedLines, activeWork, lineTime, occurrences])
+
+  const sectionLabel = useMemo(() => {
+    if (isRecording || !activeSyncLineId) return null
+    const i = activeWork.lines.findIndex((l) => l.id === activeSyncLineId)
+    if (i < 0) return null
+    if (i === 0) return 'Matla'
+    if (i === activeWork.lines.length - 1) return 'Maqta'
+    return `Sher ${String(i + 1).padStart(2, '0')}`
+  }, [isRecording, activeSyncLineId, activeWork])
+
+  const formLabel = isRecording ? null : FORM_LABELS[(activeWork.form || '').toLowerCase()] || null
+
+  const narrationText = isRecording
+    ? studyTab === 'MEANING'
+      ? ytMeaning?.simple || selectedYtLine?.combined_text || ''
+      : studyTab === 'CONTEXT'
+      ? ytMeaning?.detailed || selectedYtLine?.combined_text || ''
+      : (ytMeaning?.vocabulary || []).map((v) => `${v.term} means ${v.meaning}`).join('. ')
+    : studyTab === 'MEANING'
+    ? aiMeaning?.simple || activeLine.simple
+    : studyTab === 'CONTEXT'
+    ? aiMeaning?.detailed || activeLine.detailed
+    : (aiMeaning?.vocabulary || activeLine.vocabulary)
+        .map((v) => `${v.term} means ${v.meaning}`)
+        .join('. ')
+
+  const toggleNarration = () => {
+    if (isSpeaking) stopSpeaking()
+    else void speak(narrationText)
+  }
+
+  const moods = useMemo(() => {
+    const seen = new Set<string>()
+    worksList.forEach((w) => {
+      if (w.mood) seen.add(w.mood)
+    })
+    const list = Array.from(seen)
+    // One mood per ghazal isn't a grouping — showing it as a filter would just
+    // hide everything else on every click. Each row still wears its own mood.
+    return list.length > 1 && list.length < worksList.length ? list : []
+  }, [worksList])
+
+  const orderedWorks = useMemo(() => {
+    // Ghazals where the whole experience works come first. Unmeasured ones
+    // keep their catalogue position rather than being pushed to the bottom —
+    // "not checked yet" is not the same as "poor".
+    const withScore = worksList.map((w, i) => ({
+      w,
+      i,
+      known: readiness[w.id] !== undefined,
+      s: readinessScore(readiness[w.id]),
+    }))
+    return withScore
+      .sort((a, b) => (a.known && b.known ? b.s - a.s : a.known === b.known ? a.i - b.i : a.known ? -1 : 1))
+      .map((x) => x.w)
+  }, [worksList, readiness])
+
+  const filteredWorks = orderedWorks.filter((work) => {
+    const q = searchTerm.toLowerCase()
+    const matchesText =
+      !q ||
+      work.title.toLowerCase().includes(q) ||
+      work.poet.toLowerCase().includes(q) ||
+      work.artist.toLowerCase().includes(q)
+    const matchesMood = !moodFilter || work.mood === moodFilter
+    return matchesText && matchesMood
+  })
+
+  const exploreSubject = (name: string) => {
+    setYtQuery(name)
+    setCurrentView('EXPLORE')
+    runSearch(undefined, name)
+  }
+
+  // -------------------------------------------------------------- render ----
   return (
     <main className="shama-shell">
       <div className="noise-overlay" />
       <ShaderBackdrop />
 
-      {/* Archive.org audio engine (fallback for curated catalog) */}
+      {/* Archive.org audio engine (fallback for the curated catalog).
+          Both engines live outside the view switch so changing view never
+          interrupts playback. */}
       <audio
         ref={audioRef}
         src={activeWork.audioUrl || undefined}
@@ -742,14 +1288,12 @@ export function App() {
           // Only meaningful while the archive engine is actually driving playback.
           if (playbackSource === 'archive' && isPlaying) {
             setIsPlaying(false)
-            setPlaybackNote('No playable source found — try the [04] YT Music search for this ghazal.')
+            setPlaybackNote(COPY.noRecording)
           }
         }}
         onEnded={() => {
           if (playbackSource !== 'archive') return
-          setIsPlaying(false)
-          setPlaybackProgress(0)
-          setCurrentTime(0)
+          onTrackEnded()
         }}
       />
 
@@ -769,1142 +1313,547 @@ export function App() {
         }}
         onEnded={() => {
           if (playbackSource !== 'youtube') return
-          setIsPlaying(false)
-          setPlaybackProgress(0)
-          setCurrentTime(0)
+          onTrackEnded()
         }}
       />
 
-      <div className="console-container">
-        {/* Header Bar */}
-        <header className="console-header">
-          <div className="brand-section">
-            <LiquidLogoMark />
+      <JamJoinPrompt jam={jam} />
+
+      <div className="shama-room">
+        <header className="room-header">
+          <div className="brand">
+            <span className="liquid-logo" aria-hidden="true">
+              <span className="liquid-logo__letter">ش</span>
+            </span>
             <div>
-              <span className="mono-tag">Acoustic Audio System</span>
-              <h1 className="console-title">
-                SHAMA // CONSOLE <span className="status-dot status-dot--green" />
-              </h1>
+              <h1 className="brand-name">SHAMA</h1>
+              <div className="brand-sub">A digital mehfil</div>
             </div>
-            
-            {/* View selectors */}
-            <nav className="console-nav">
+          </div>
+
+          <div className="room-actions">
+            <MehfilJamBar jam={jam} />
+          </div>
+
+          <nav className="room-nav" aria-label="Sections">
+            {(
+              [
+                ['LISTEN', 'Listen'],
+                ['LIBRARY', 'Library'],
+                ['EXPLORE', 'Explore'],
+              ] as [View, string][]
+            ).map(([id, label]) => (
               <button
+                key={id}
                 type="button"
-                className={`console-nav-btn ${
-                  currentView === 'LISTENING' ? 'console-nav-btn--active' : ''
-                }`}
-                onClick={() => setCurrentView('LISTENING')}
+                className={`room-nav-btn ${currentView === id ? 'room-nav-btn--active' : ''}`}
+                aria-current={currentView === id ? 'page' : undefined}
+                onClick={() => setCurrentView(id)}
               >
-                [01] Listening Deck
-              </button>
-              <button
-                type="button"
-                className={`console-nav-btn ${
-                  currentView === 'CATALOG' ? 'console-nav-btn--active' : ''
-                }`}
-                onClick={() => setCurrentView('CATALOG')}
-              >
-                [02] Catalog
-              </button>
-              <button
-                type="button"
-                className={`console-nav-btn ${
-                  currentView === 'FEATURED' ? 'console-nav-btn--active' : ''
-                }`}
-                onClick={() => setCurrentView('FEATURED')}
-              >
-                [03] Curator Picks
-                {userCatalogItems.length > 0 && (
-                  <span
-                    style={{
-                      marginLeft: '6px',
-                      background: 'var(--color-accent)',
-                      color: '#1a1410',
-                      borderRadius: '8px',
-                      padding: '1px 6px',
-                      fontSize: '0.62rem',
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    {userCatalogItems.length}
-                  </span>
+                {label}
+                {id === 'LISTEN' && mehfil.length > 0 && (
+                  <span className="room-nav-count">{mehfil.length}</span>
                 )}
               </button>
-              <button
-                type="button"
-                className={`console-nav-btn ${
-                  currentView === 'YTMUSIC' ? 'console-nav-btn--active' : ''
-                }`}
-                onClick={() => setCurrentView('YTMUSIC')}
-              >
-                [04] YT Music
-              </button>
-            </nav>
-          </div>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }} className="nav-extra">
-            <span className="mono-tag" style={{ opacity: 0.6 }}>
-              AUDIO_STATE: {isPlaying ? 'PLAY' : 'STOP'}
-            </span>
-            <span className="mono-tag">
-              SYS_TINT: BRONZE
-            </span>
-          </div>
+            ))}
+          </nav>
         </header>
 
-        {/* View switching logic */}
-        {currentView === 'LISTENING' && (
-          <div className="console-body">
-            {/* Panel 1: Library Catalog Sidebar */}
-            <aside className="console-panel">
-              <div className="panel-header">
-                <h2 className="panel-title">[01] SELECT WORK</h2>
-                <span className="mono-tag">DECK_LIST</span>
-              </div>
-              <div className="panel-content" style={{ padding: '12px' }}>
-                <div className="bracket-list">
-                  {worksList.map((work) => (
-                    <button
-                      key={work.id}
-                      type="button"
-                      className={`bracket-item-btn ${
-                        activeWork.id === work.id ? 'bracket-item-btn--active' : ''
-                      }`}
-                      onClick={() => handleWorkSelect(work)}
-                    >
-                      <span className="bracket-indicator">[{work.id}]</span>
-                      <div style={{ flex: 1 }}>
-                        <div className="item-main-text">{work.title}</div>
-                        <div className="item-sub-text">
-                          {work.poet.toUpperCase()} // {work.form.toUpperCase()}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
+        {/* ------------------------------------------------------- LISTEN -- */}
+        {currentView === 'LISTEN' && (
+          <div className={`mehfil-room ${quiet ? 'mehfil-room--quiet' : ''}`}>
+            <aside className="mehfil-aside">
+              <MehfilQueue
+                items={mehfil}
+                currentIndex={mehfilIndex}
+                onPlay={playMehfilAt}
+                onRemove={removeFromMehfil}
+                onMove={reorderMehfil}
+                onPlayNext={playNextInMehfil}
+                onBrowse={() => setCurrentView('LIBRARY')}
+              />
             </aside>
 
-            {/* Panel 2: Listening Deck */}
-            <section className="console-panel" style={{ borderRight: '1px solid var(--color-border)' }}>
-              <div className="panel-header">
-                <h2 className="panel-title">[02] PLAYBACK PANEL</h2>
-                <div className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
-                  {isYT ? 'YT MUSIC' : nowArtist.toUpperCase()}
-                </div>
-              </div>
+            <div className="mehfil-stage">
+              <ListeningStage
+                formLabel={formLabel}
+                title={nowTitle}
+                poet={isRecording ? undefined : activeWork.poet}
+                singer={nowArtist}
+                couplet={heroCouplet}
+                coupletFallback={heroFallback}
+                coverUrl={nowCover}
+                isPlaying={isPlaying}
+                resolving={resolving}
+                onTogglePlay={handlePlayPause}
+                currentTime={currentTime}
+                duration={duration}
+                markers={timelineMarkers}
+                sectionLabel={sectionLabel}
+                onSeek={seekTo}
+                formatTime={formatTime}
+                volume={volume}
+                isMuted={isMuted}
+                onVolume={(v) => {
+                  setVolume(v)
+                  if (isMuted) setIsMuted(false)
+                }}
+                onToggleMute={() => setIsMuted(!isMuted)}
+                onPrev={goPrev}
+                onNext={goNext}
+                hasPrev={hasPrev && !isGuest}
+                hasNext={hasNext && !isGuest}
+                readOnly={isGuest}
+                quiet={quiet}
+                onToggleQuiet={() => setQuiet((v) => !v)}
+                playbackNote={playbackNote}
+                loopSher={loopSher}
+                onToggleLoop={toggleLoop}
+                canLoop={!!currentSpan}
+                unknownLine={
+                  !isRecording && currentOccurrence?.couplet === null && adhocLine !== currentOccurrence.text
+                    ? currentOccurrence.text
+                    : null
+                }
+                onExplainLine={(text) => {
+                  setAdhocLine(text)
+                  setStudyTab('MEANING')
+                }}
+                candidates={isRecording ? null : resolveCandidates}
+                onPickCandidate={(videoId) => {
+                  const pick = resolveCandidates?.find((c) => c.videoId === videoId)
+                  if (pick) playCandidate(pick)
+                }}
+                saveState={
+                  isRecording && ytTrack
+                    ? { saved: isInCatalog(ytTrack.videoId), onToggle: toggleCollected }
+                    : null
+                }
+                onExplorePoet={isRecording ? undefined : exploreSubject}
+                onExploreSinger={exploreSubject}
+              />
+            </div>
 
-              {/* 3D Scene Viewport */}
-              <div className="scene-deck">
-                <MehfilScene isPlaying={isPlaying} coverUrl={nowCover} onTogglePlay={handlePlayPause} />
-              </div>
-
-              {/* Now-playing strip */}
-              <div className="now-playing-strip">
-                <div className="now-playing-meta">
-                  <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
-                    {resolving
-                      ? '⟳ RESOLVING · YT MUSIC'
-                      : isStreaming
-                      ? '▶ STREAMING · YT MUSIC'
-                      : '▶ ARCHIVE DECK'}
-                  </span>
-                  <div className="now-playing-title">{nowTitle}</div>
-                  <div className="item-sub-text">{nowArtist}</div>
-                  {playbackNote && (
-                    <div className="playback-note">{playbackNote}</div>
-                  )}
-                </div>
-                {/* Add to My Catalog heart button — only for YT tracks */}
-                {isYT && ytTrack && (
-                  <button
-                    type="button"
-                    className="console-btn"
-                    onClick={toggleCatalogEntry}
-                    title={isInCatalog(ytTrack.videoId) ? 'Remove from My Catalog' : 'Add to My Catalog'}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '6px 12px',
-                      color: isInCatalog(ytTrack.videoId) ? '#e57373' : 'var(--color-text-muted)',
-                      borderColor: isInCatalog(ytTrack.videoId) ? '#e57373' : undefined,
-                    }}
-                  >
-                    <Heart
-                      size={16}
-                      fill={isInCatalog(ytTrack.videoId) ? '#e57373' : 'none'}
-                      stroke={isInCatalog(ytTrack.videoId) ? '#e57373' : 'currentColor'}
-                    />
-                    <span style={{ fontSize: '0.7rem' }}>
-                      {isInCatalog(ytTrack.videoId) ? 'IN CATALOG' : 'ADD TO CATALOG'}
-                    </span>
-                  </button>
-                )}
-              </div>
-
-              {/* Hardware-like Audio Player Deck */}
-              <div className="player-deck">
-                <div className="player-controls">
-                  <button
-                    type="button"
-                    className="console-btn console-btn--primary"
-                    onClick={handlePlayPause}
-                    disabled={resolving}
-                    aria-label={isPlaying ? 'Pause' : 'Play'}
-                  >
-                    {resolving ? (
-                      <Loader2 size={14} className="spin" />
-                    ) : isPlaying ? (
-                      <Pause size={14} />
-                    ) : (
-                      <Play size={14} />
-                    )}
-                    <span>{resolving ? 'LOADING' : isPlaying ? 'PAUSE' : 'PLAY'}</span>
-                  </button>
-                </div>
-
-                {/* Monospace Interactive Waveform Progress */}
-                <div
-                  className="waveform-display"
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect()
-                    const clickX = e.clientX - rect.left
-                    const percentage = clickX / rect.width
-                    if (!duration) return
-                    if (playbackSource === 'youtube') {
-                      setYtSeek(percentage * duration)
-                    } else if (audioRef.current) {
-                      audioRef.current.currentTime = percentage * duration
-                    }
+            <div className="mehfil-study">
+              {isRecording ? (
+                <RecordingSheet
+                  loading={ytLyrics.loading}
+                  syncedLines={ytSyncedLines}
+                  couplets={ytCouplets}
+                  rawText={ytLyrics.text}
+                  currentTime={currentTime}
+                  activeSyncedIndex={activeSyncedIndex}
+                  selectedCoupletIndex={selectedYtLine?.index ?? null}
+                  onSelectCouplet={(c) => {
+                    setAdhocLine(null)
+                    setSelectedYtLine(c)
                   }}
-                >
-                  <div
-                    className="waveform-progress"
-                    style={{ width: `${playbackProgress}%` }}
-                  />
-                  <div className="waveform-bars">
-                    {Array.from({ length: 40 }).map((_, i) => {
-                      const isActive = (i / 40) * 100 <= playbackProgress
-                      const barHeight =
-                        4 + Math.abs(Math.sin((i + playbackProgress * 0.1) * 0.5)) * 14
-                      return (
-                        <div
-                          key={i}
-                          className={`waveform-bar ${isActive ? 'waveform-bar--active' : ''}`}
-                          style={{ height: `${barHeight}px` }}
-                        />
-                      )
-                    })}
-                  </div>
-                </div>
-
-                {/* Volume & Timestamp knobs */}
-                <div className="volume-section" style={{ gap: '14px' }}>
-                  <span style={{ fontSize: '0.74rem', opacity: 0.8 }} className="timestamp">
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </span>
-                  
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setIsMuted(!isMuted)}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--color-text-muted)',
-                        display: 'flex',
-                        alignItems: 'center'
-                      }}
-                    >
-                      {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-                    </button>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={isMuted ? 0 : volume}
-                      onChange={(e) => {
-                        setVolume(Number(e.target.value))
-                        if (isMuted) setIsMuted(false)
-                      }}
-                      style={{
-                        width: '50px',
-                        height: '4px',
-                        accentColor: 'var(--color-accent)',
-                        cursor: 'pointer'
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {!isYT ? (
-                <>
-                  {/* Script Toggles */}
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(4, 1fr)',
-                      borderBottom: '1px solid var(--color-border)',
-                      background: 'rgba(16, 13, 11, 0.4)'
-                    }}
-                  >
-                    {(['URDU', 'HINDI', 'ROMAN', 'ENGLISH'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={`tab-btn ${scriptMode === mode ? 'tab-btn--active' : ''}`}
-                        onClick={() => setScriptMode(mode)}
-                        style={{ borderBottom: 'none' }}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Mehfil Mode toolbar */}
-                  <div className="mehfil-bar">
-                    <div className="mehfil-bar-left">
-                      <button
-                        type="button"
-                        className={`mehfil-chip ${mehfilSync ? 'mehfil-chip--on' : ''}`}
-                        onClick={() => setMehfilSync((v) => !v)}
-                        title="Auto-scroll and reveal meaning as the singer reaches each couplet"
-                      >
-                        {mehfilSync ? '◉' : '○'} FOLLOW SINGER
-                      </button>
-                      <button
-                        type="button"
-                        className="mehfil-chip"
-                        onClick={mukarrar}
-                        title="Replay the current couplet"
-                        disabled={!hasTimestamps}
-                      >
-                        ↺ MUKARRAR
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      className={`mehfil-chip ${stampMode ? 'mehfil-chip--rec' : ''}`}
-                      onClick={() => setStampMode((v) => !v)}
-                      title="Author couplet timestamps by tapping each couplet as the singer reaches it"
-                    >
-                      {stampMode ? '● SYNCING' : 'SYNC COUPLETS'}
-                    </button>
-                  </div>
-
-                  {stampMode && (
-                    <div className="stamp-hint">
-                      Play the ghazal and tap each couplet the instant the singer begins it. Times
-                      save automatically.
-                      <div className="stamp-actions">
-                        <button type="button" className="mehfil-chip" onClick={exportStamps}>
-                          ⤓ EXPORT JSON
-                        </button>
-                        <button type="button" className="mehfil-chip" onClick={clearStamps}>
-                          ✕ CLEAR
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {!hasTimestamps && !stampMode && (
-                    <div className="stamp-hint">
-                      Reader mode — tap any couplet to jump the audio there. Turn on{' '}
-                      <strong>Sync couplets</strong> to teach Shama the timings and unlock live
-                      Mehfil Mode.
-                    </div>
-                  )}
-
-                  {/* Lyrics Sheet Scroll */}
-                  <div className="panel-content lyrics-deck" style={{ padding: 0 }}>
-                    {activeWork.lines.map((line, index) => {
-                      const t = lineTime(activeWork, line)
-                      const isSyncActive = activeSyncLineId === line.id
-                      const isSelected = activeLine.id === line.id
-                      return (
-                        <div
-                          id={`sher-${line.id}`}
-                          key={line.id}
-                          className={`sher-block ${isSelected ? 'sher-block--active' : ''} ${
-                            isSyncActive ? 'sher-block--singing' : ''
-                          } ${stampMode ? 'sher-block--stamp' : ''}`}
-                          onClick={() => {
-                            if (stampMode) {
-                              stampCouplet(line.id)
-                              return
-                            }
-                            handleLineSelect(line)
-                            if (t !== null) seekTo(t)
-                          }}
-                        >
-                          <div className="sher-meta-row">
-                            <div
-                              className="mono-tag"
-                              style={{ fontSize: '0.66rem', color: 'var(--color-accent)' }}
-                            >
-                              COUPLET // [0{index + 1}]
-                            </div>
-                            {(t !== null || stampMode) && (
-                              <span className={`stamp-badge ${t !== null ? 'stamp-badge--set' : ''}`}>
-                                {t !== null ? `⏱ ${formatTime(t)}` : 'TAP TO STAMP'}
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="verse-original">{renderScriptText(line)}</h3>
-                          <p className="verse-translit">↳ {line.transliteration}</p>
-                          <p className="verse-trans">{line.translation}</p>
-                          {isSyncActive && mehfilSync && (
-                            <div className="sher-reveal">
-                              <span className="sher-reveal-label">MA&apos;NI · MEANING</span>
-                              {line.simple}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </>
+                  onSeek={seekTo}
+                  onExplainLine={(text) => {
+                    setSelectedYtLine(null)
+                    setAdhocLine(text)
+                    setStudyTab('MEANING')
+                  }}
+                  explainedLine={adhocLine}
+                  offset={lyricOffset}
+                  onOffsetChange={(v) => {
+                    setLyricOffset(v)
+                    if (ytTrack) writeLyricOffset(ytTrack.videoId, v)
+                  }}
+                  timingReliable={ytLyrics.timingReliable}
+                  otherRenditions={ytLyrics.otherRenditions}
+                  onFindRendition={(q) => {
+                    setYtQuery(q)
+                    setCurrentView('EXPLORE')
+                    runSearch(undefined, q)
+                  }}
+                />
               ) : (
-                /* YouTube Music lyrics sheet */
-                <div className="panel-content lyrics-deck" style={{ padding: '0' }}>
-                  <div className="yt-lyrics-header">
-                    <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
-                      LYRICS
-                    </span>
-                    {ytLyrics.source && (
-                      <span className="item-sub-text">SOURCE // {ytLyrics.source}</span>
-                    )}
-                  </div>
-                  <div className="yt-lyrics-body" ref={syncedLyricsRef}>
-                    {ytLyrics.loading ? (
-                      <div className="yt-lyrics-empty">
-                        <Loader2 size={16} className="spin" /> Fetching lyrics…
-                      </div>
-                    ) : ytSyncedLines.length > 0 ? (
-                      ytSyncedLines.map((line, i) => {
-                        const currentMs = currentTime * 1000
-                        const isActive = line.time_ms <= currentMs && (i === ytSyncedLines.length - 1 || ytSyncedLines[i + 1].time_ms > currentMs)
-                        return (
-                          <p
-                            key={i}
-                            className={`yt-lyric-line ${isActive ? 'yt-lyric-line--active' : ''}`}
-                            ref={(el) => {
-                              if (isActive && el) {
-                                el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                              }
-                            }}
-                          >
-                            {line.text.trim() === '' ? '\u00A0' : line.text}
-                          </p>
-                        )
-                      })
-                    ) : ytLyrics.text ? (
-                      ytCouplets.length > 0 ? (
-                        ytCouplets.map((couplet) => (
-                          <div
-                            key={couplet.index}
-                            className={`yt-couplet-block ${selectedYtLine?.index === couplet.index ? 'yt-couplet-block--active' : ''} ${couplet.is_refrain ? 'yt-couplet-block--refrain' : ''}`}
-                            onClick={() => setSelectedYtLine(couplet)}
-                            style={{
-                              padding: '10px 14px',
-                              margin: '4px 0',
-                              borderRadius: '6px',
-                              cursor: 'pointer',
-                              border: selectedYtLine?.index === couplet.index ? '1px solid var(--color-accent)' : '1px solid transparent',
-                              background: selectedYtLine?.index === couplet.index ? 'rgba(var(--color-accent-rgb, 255,183,77), 0.08)' : 'transparent',
-                              transition: 'all 0.2s ease',
-                            }}
-                          >
-                            <p className="yt-lyric-line" style={{ margin: '2px 0', opacity: couplet.is_refrain ? 0.7 : 1 }}>
-                              {couplet.line1}
-                            </p>
-                            {couplet.line2 && (
-                              <p className="yt-lyric-line" style={{ margin: '2px 0', opacity: couplet.is_refrain ? 0.7 : 1 }}>
-                                {couplet.line2}
-                              </p>
-                            )}
-                            {couplet.is_refrain && (
-                              <span className="mono-tag" style={{ fontSize: '0.55rem', opacity: 0.6 }}>MUKARRAR</span>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        ytLyrics.text.split('\n').map((line, i) => (
-                          <p key={i} className="yt-lyric-line">
-                            {line.trim() === '' ? '\u00A0' : line}
-                          </p>
-                        ))
-                      )
-                    ) : (
-                      <div className="yt-lyrics-empty">
-                        No synced lyrics available for this track on YouTube Music.
-                        <br />
-                        Enjoy the ghazal — the vinyl turns while it plays.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </section>
-
-            {/* Panel 3: Annotation Companion Deck */}
-            <aside className="console-panel">
-              <div className="panel-header">
-                <h2 className="panel-title">[03] ANNOTATION PANEL</h2>
-                <span className="mono-tag">DECK</span>
-              </div>
-
-              {/* Tab Deck */}
-              {(!isYT || selectedYtLine) && (
-                <div className="tab-deck">
-                  <button
-                    type="button"
-                    className={`tab-btn ${activeTab === 'SIMPLE' ? 'tab-btn--active' : ''}`}
-                    onClick={() => setActiveTab('SIMPLE')}
-                  >
-                    <BookOpen size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                    <span>Simple</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`tab-btn ${activeTab === 'LITERARY' ? 'tab-btn--active' : ''}`}
-                    onClick={() => setActiveTab('LITERARY')}
-                  >
-                    <FileText size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                    <span>Poetic</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`tab-btn ${activeTab === 'GLOSSARY' ? 'tab-btn--active' : ''}`}
-                    onClick={() => setActiveTab('GLOSSARY')}
-                  >
-                    <HelpCircle size={12} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                    <span>Glossary</span>
-                  </button>
-                </div>
+                <SherSheet
+                  lines={activeWork.lines}
+                  form={activeWork.form}
+                  activeLineId={activeLine.id}
+                  singingLineId={activeSyncLineId}
+                  scriptMode={scriptMode}
+                  onScriptMode={setScriptMode}
+                  onSelectLine={handleLineSelect}
+                  lineTime={workLineTime}
+                  formatTime={formatTime}
+                  follow={follow}
+                  onToggleFollow={() => setFollow((v) => !v)}
+                  hasTimestamps={hasTimestamps}
+                  timingState={timingState}
+                />
               )}
 
-              <div className="panel-content">
-                {isYT ? (
-                  /* YouTube track details + AI meaning */
-                  <>
-                    <div
-                      style={{
-                        marginBottom: '12px',
-                        borderBottom: '1px solid var(--color-border)',
-                        paddingBottom: '10px'
-                      }}
-                    >
-                      <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
-                        NOW PLAYING · YT MUSIC
-                      </span>
-                      <div className="explanation-card" style={{ marginTop: '8px' }}>
-                        <div className="explanation-card-header">Track</div>
-                        <div className="explanation-card-body">
-                          <strong style={{ color: 'var(--color-highlight)' }}>{nowTitle}</strong>
-                          {' — '}{nowArtist}
-                          {ytTrack?.album && <span className="item-sub-text"> · {ytTrack.album}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    {selectedYtLine ? (
-                      <>
-                        <div style={{ marginBottom: '14px', borderBottom: '1px solid var(--color-border)', paddingBottom: '10px' }}>
-                          <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>ACTIVE COUPLET</span>
-                          <p className="verse-translit" style={{ marginTop: '8px', fontSize: '0.86rem' }}>
-                            "{selectedYtLine.combined_text}"
-                          </p>
-                          {ytMeaning?.translation && (
-                            <p className="item-sub-text" style={{ marginTop: '6px', fontStyle: 'italic', lineHeight: 1.5 }}>
-                              {ytMeaning.translation}
-                            </p>
-                          )}
-                        </div>
-
-                        {activeTab === 'SIMPLE' && (
-                          <div className="explanation-card">
-                            <div className="explanation-card-header">Simple Meaning</div>
-                            <div className="explanation-card-body">
-                              {ytMeaningLoading ? (
-                                <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <Loader2 size={14} className="spin" /> Generating meaning...
-                                </span>
-                              ) : ytMeaning?.simple ? (
-                                <>
-                                  {ytMeaning.simple}
-                                  {ytMeaning.mood && (
-                                    <div className="item-sub-text" style={{ marginTop: '10px' }}>
-                                      Mood: <strong style={{ color: 'var(--color-highlight)' }}>{ytMeaning.mood}</strong>
-                                      {ytMeaning.cached && ' · cached'}
-                                    </div>
-                                  )}
-                                </>
-                              ) : (
-                                <span style={{ color: 'var(--color-muted)' }}>Select a couplet to see its meaning.</span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {activeTab === 'LITERARY' && (
-                          <div className="explanation-card">
-                            <div className="explanation-card-header">Literary Analysis & Metaphors</div>
-                            <div className="explanation-card-body">
-                              {ytMeaningLoading ? (
-                                <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <Loader2 size={14} className="spin" /> Generating analysis...
-                                </span>
-                              ) : ytMeaning?.detailed ? (
-                                <>
-                                  {ytMeaning.detailed}
-                                  {ytMeaning.literary_devices && ytMeaning.literary_devices.length > 0 && (
-                                    <ul style={{ margin: '12px 0 0', paddingLeft: '14px', listStyleType: 'square' }}>
-                                      {ytMeaning.literary_devices.map((d, i) => (
-                                        <li key={i} style={{ marginBottom: '6px' }}>
-                                          <strong style={{ color: 'var(--color-highlight)' }}>{d.device}</strong>
-                                          {d.english_name && ` (${d.english_name})`}: {d.explanation}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </>
-                              ) : (
-                                <span style={{ color: 'var(--color-muted)' }}>Select a couplet to see literary analysis.</span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {activeTab === 'GLOSSARY' && (
-                          <div className="explanation-card">
-                            <div className="explanation-card-header">Vocabulary & Glossary</div>
-                            <div className="explanation-card-body">
-                              {ytMeaningLoading ? (
-                                <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <Loader2 size={14} className="spin" /> Loading vocabulary...
-                                </span>
-                              ) : ytMeaning?.vocabulary && ytMeaning.vocabulary.length > 0 ? (
-                                <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
-                                  {ytMeaning.vocabulary.map((vocab, index) => (
-                                    <li key={index} style={{ marginBottom: '8px' }}>
-                                      <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : (
-                                <span style={{ color: 'var(--color-muted)' }}>Select a couplet to see vocabulary.</span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="item-sub-text" style={{ marginTop: '10px', lineHeight: 1.5 }}>
-                        Click a couplet on the lyrics deck to see its AI-generated meaning,
-                        literary devices, and vocabulary.
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {/* Selected Line Header */}
-                    <div
-                      style={{
-                        marginBottom: '18px',
-                        borderBottom: '1px solid var(--color-border)',
-                        paddingBottom: '12px'
-                      }}
-                    >
-                      <span className="mono-tag" style={{ color: 'var(--color-highlight)' }}>
-                        ACTIVE COUPLET DETAIL
-                      </span>
-                      <p className="verse-translit" style={{ marginTop: '8px', fontSize: '0.86rem' }}>
-                        "{activeLine.roman}"
-                      </p>
-                      {aiMeaning?.translation && (
-                        <p className="item-sub-text" style={{ marginTop: '6px', fontStyle: 'italic', lineHeight: 1.5 }}>
-                          {aiMeaning.translation}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Tab Content Display */}
-                    {activeTab === 'SIMPLE' && (
-                      <div className="explanation-card">
-                        <div className="explanation-card-header">Simple Meaning</div>
-                        <div className="explanation-card-body">
-                          {aiLoading ? (
-                            <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Loader2 size={14} className="spin" /> Generating meaning...
-                            </span>
-                          ) : aiMeaning?.simple ? (
-                            <>
-                              {aiMeaning.simple}
-                              {aiMeaning.mood && (
-                                <div className="item-sub-text" style={{ marginTop: '10px' }}>
-                                  Mood: <strong style={{ color: 'var(--color-highlight)' }}>{aiMeaning.mood}</strong>
-                                  {aiMeaning.cached && ' · cached'}
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            activeLine.simple
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {activeTab === 'LITERARY' && (
-                      <div className="explanation-card">
-                        <div className="explanation-card-header">Literary Analysis & Metaphors</div>
-                        <div className="explanation-card-body">
-                          {aiLoading ? (
-                            <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Loader2 size={14} className="spin" /> Generating analysis...
-                            </span>
-                          ) : aiMeaning?.detailed ? (
-                            <>
-                              {aiMeaning.detailed}
-                              {aiMeaning.literary_devices && aiMeaning.literary_devices.length > 0 && (
-                                <ul style={{ margin: '12px 0 0', paddingLeft: '14px', listStyleType: 'square' }}>
-                                  {aiMeaning.literary_devices.map((d, i) => (
-                                    <li key={i} style={{ marginBottom: '6px' }}>
-                                      <strong style={{ color: 'var(--color-highlight)' }}>{d.device}</strong>
-                                      {d.english_name && ` (${d.english_name})`}: {d.explanation}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </>
-                          ) : (
-                            activeLine.detailed
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {activeTab === 'GLOSSARY' && (
-                      <div className="explanation-card">
-                        <div className="explanation-card-header">Vocabulary & Glossary</div>
-                        <div className="explanation-card-body">
-                          {aiLoading ? (
-                            <span style={{ color: 'var(--color-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <Loader2 size={14} className="spin" /> Loading vocabulary...
-                            </span>
-                          ) : (
-                            <ul style={{ margin: 0, paddingLeft: '14px', listStyleType: 'square' }}>
-                              {(aiMeaning?.vocabulary && aiMeaning.vocabulary.length > 0
-                                ? aiMeaning.vocabulary
-                                : activeLine.vocabulary
-                              ).map((vocab, index) => (
-                                <li key={index} style={{ marginBottom: '8px' }}>
-                                  <strong style={{ color: 'var(--color-highlight)' }}>{vocab.term}</strong>: {vocab.meaning}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* TTS Control Area */}
-                <div
-                  style={{
-                    marginTop: '24px',
-                    borderTop: '1px solid var(--color-border)',
-                    paddingTop: '20px'
-                  }}
-                >
-                  <button
-                    type="button"
-                    className={`console-btn ${isSpeaking ? 'console-btn--active' : ''}`}
-                    onClick={toggleSpeech}
-                    style={{ width: '100%' }}
-                  >
-                    <Volume2 size={14} />
-                    <span>
-                      {isSpeaking
-                        ? 'STOP NARRATION'
-                        : isYT
-                        ? (selectedYtLine ? 'NARRATE MEANING' : 'NARRATE LYRICS')
-                        : 'NARRATE DESCRIPTION'}
-                    </span>
-                  </button>
-                  <div className="item-sub-text" style={{ textAlign: 'center', marginTop: '8px' }}>
-                    {isYT ? 'Reads fetched lyrics aloud' : 'AI-powered voice narration'}
-                  </div>
-                </div>
-              </div>
-            </aside>
+              <MeaningPanel
+                tab={studyTab}
+                onTab={setStudyTab}
+                couplet={
+                  isRecording
+                    ? adhocLine
+                      ? { roman: adhocLine }
+                      : selectedYtLine
+                      ? { roman: selectedYtLine.combined_text }
+                      : null
+                    : adhocLine
+                    ? { roman: adhocLine }
+                    : {
+                        urdu: activeLine.urdu,
+                        roman: activeLine.transliteration || activeLine.roman,
+                        translation: activeLine.translation,
+                      }
+                }
+                meaning={isRecording ? ytMeaning : aiMeaning}
+                loading={isRecording ? ytMeaningLoading : aiLoading}
+                failed={isRecording ? ytMeaningFailed : aiFailed}
+                onRetry={() => setMeaningNonce((n) => n + 1)}
+                fallback={
+                  isRecording || adhocLine
+                    ? undefined
+                    : {
+                        simple: activeLine.simple,
+                        detailed: activeLine.detailed,
+                        vocabulary: activeLine.vocabulary,
+                      }
+                }
+                facts={{
+                  title: nowTitle,
+                  poet: isRecording ? undefined : activeWork.poet,
+                  singer: nowArtist,
+                  form: isRecording ? undefined : activeWork.form,
+                  mood: isRecording ? ytMeaning?.mood : activeWork.mood || aiMeaning?.mood,
+                }}
+                onExplorePoet={isRecording ? undefined : exploreSubject}
+                onExploreSinger={exploreSubject}
+                onPronounce={pronounce}
+                isSpeaking={isSpeaking}
+                onToggleNarration={toggleNarration}
+                emptyPrompt={
+                  isRecording
+                    ? 'Tap any line of the poetry to read what it means.'
+                    : 'Choose a couplet to sit with it a while.'
+                }
+              />
+            </div>
           </div>
         )}
 
-        {/* View 2: Searchable catalog grid */}
-        {currentView === 'CATALOG' && (
-          <div className="catalog-deck">
-            <div className="catalog-search-row">
-              <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-                <Search
-                  size={16}
-                  style={{
-                    position: 'absolute',
-                    left: '16px',
-                    color: 'var(--color-text-muted)'
-                  }}
-                />
-                <input
-                  type="text"
-                  className="console-input"
-                  placeholder="SEARCH BY TITLE, POET, ARTIST..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  style={{ paddingLeft: '44px' }}
-                />
-              </div>
+        {/* ------------------------------------------------------ LIBRARY -- */}
+        {currentView === 'LIBRARY' && (
+          <div className="page">
+            <div className="page-head">
+              <span className="eyebrow">The Library</span>
+              <h2 className="page-title">Ghazals, read and heard</h2>
+              <p className="page-lede">
+                Each of these carries its couplets, their meanings and the words worth knowing.
+                Choose one and it joins tonight&rsquo;s mehfil.
+              </p>
             </div>
 
-            <table className="catalog-table">
-              <thead>
-                <tr>
-                  <th className="catalog-th" style={{ width: '80px' }}>Code</th>
-                  <th className="catalog-th">Title</th>
-                  <th className="catalog-th">Poet</th>
-                  <th className="catalog-th">Artist</th>
-                  <th className="catalog-th">Form</th>
-                  <th className="catalog-th" style={{ width: '120px' }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCatalog.map((work) => (
-                  <tr key={work.id} className="catalog-tr" onClick={() => handleWorkSelect(work)}>
-                    <td className="catalog-td">[{work.id}]</td>
-                    <td className="catalog-td" style={{ fontWeight: 'bold', color: 'var(--color-highlight)' }}>
-                      {work.title}
-                    </td>
-                    <td className="catalog-td">{work.poet}</td>
-                    <td className="catalog-td">{work.artist}</td>
-                    <td className="catalog-td">
-                      <span className="catalog-tag">{work.form}</span>
-                    </td>
-                    <td className="catalog-td">
-                      <button
-                        type="button"
-                        className="console-btn"
-                        style={{ padding: '4px 8px', fontSize: '0.66rem' }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleWorkSelect(work)
-                          setCurrentView('LISTENING')
-                        }}
-                      >
-                        LOAD DECK
-                      </button>
-                    </td>
-                  </tr>
+            <div className="search-field">
+              <Search size={16} aria-hidden="true" color="var(--color-text-faint)" />
+              <input
+                type="search"
+                aria-label="Search the library by ghazal, poet or singer"
+                placeholder="A ghazal, a poet, a singer…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+
+            {moods.length > 0 && (
+              <div className="mood-row" role="group" aria-label="Filter by mood">
+                <button
+                  type="button"
+                  className={`mood-chip ${moodFilter === null ? 'mood-chip--active' : ''}`}
+                  aria-pressed={moodFilter === null}
+                  onClick={() => setMoodFilter(null)}
+                >
+                  All
+                </button>
+                {moods.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`mood-chip ${moodFilter === m ? 'mood-chip--active' : ''}`}
+                    aria-pressed={moodFilter === m}
+                    onClick={() => setMoodFilter(moodFilter === m ? null : m)}
+                  >
+                    {m}
+                  </button>
                 ))}
-                {filteredCatalog.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="catalog-td" style={{ textAlign: 'center', color: 'var(--color-text-muted)' }}>
-                      NO CORRESPONDING RECORD FOUND IN THE ARCHIVE
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* View 3: User's Personal Catalog + Curator picks */}
-        {currentView === 'FEATURED' && (
-          <div className="featured-deck">
-            {/* User's Personal Catalog Section */}
-            <div style={{ marginBottom: '32px' }}>
-              <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
-                MY CATALOG · SAVED FROM YT MUSIC
-              </span>
-              <h2
-                style={{
-                  fontFamily: 'Space Mono',
-                  fontSize: '1.5rem',
-                  textTransform: 'uppercase',
-                  margin: '8px 0 20px 0',
-                  letterSpacing: '0.02em'
-                }}
-              >
-                Your Personal Collection
-              </h2>
-
-              {userCatalogItems.length === 0 ? (
-                <div
-                  className="explanation-card"
-                  style={{ textAlign: 'center', padding: '40px 20px' }}
-                >
-                  <div className="explanation-card-body" style={{ color: 'var(--color-text-muted)' }}>
-                    <Heart size={32} style={{ marginBottom: '12px', opacity: 0.4 }} />
-                    <p style={{ margin: '8px 0', fontSize: '0.88rem' }}>
-                      Your catalog is empty. Search on{' '}
-                      <button
-                        type="button"
-                        onClick={() => setCurrentView('YTMUSIC')}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: 'var(--color-accent)',
-                          cursor: 'pointer',
-                          textDecoration: 'underline',
-                          font: 'inherit',
-                        }}
-                      >
-                        [04] YT Music
-                      </button>{' '}
-                      and hit the ❤️ button while a ghazal plays to save it here.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="yt-results-grid">
-                  {userCatalogItems.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className={`yt-result-card ${
-                        isYT && ytTrack?.videoId === entry.videoId ? 'yt-result-card--active' : ''
-                      }`}
-                      onClick={() => playFromUserCatalog(entry)}
-                      style={{ position: 'relative' }}
-                    >
-                      <div className="yt-result-thumb">
-                        {entry.thumbnail ? (
-                          <img src={entry.thumbnail} alt={entry.title} />
-                        ) : (
-                          <Music size={20} />
-                        )}
-                        <div className="yt-result-play">
-                          <Play size={18} />
-                        </div>
-                      </div>
-                      <div className="yt-result-meta">
-                        <div className="yt-result-title">{entry.title}</div>
-                        <div className="item-sub-text">{entry.artist}</div>
-                        {entry.album && (
-                          <div className="item-sub-text" style={{ opacity: 0.6 }}>
-                            {entry.album}
-                          </div>
-                        )}
-                      </div>
-                      {/* Remove button */}
-                      <button
-                        type="button"
-                        title="Remove from catalog"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          removeUserCatalogEntry(entry.id)
-                        }}
-                        style={{
-                          position: 'absolute',
-                          top: '8px',
-                          right: '8px',
-                          background: 'rgba(0,0,0,0.7)',
-                          border: '1px solid rgba(229,115,115,0.4)',
-                          borderRadius: '4px',
-                          padding: '4px',
-                          cursor: 'pointer',
-                          color: '#e57373',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Original Curator Picks */}
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '28px' }}>
-              <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
-                CURATORIAL ANNOTATION DESK
-              </span>
-              <h2
-                style={{
-                  fontFamily: 'Space Mono',
-                  fontSize: '1.4rem',
-                  textTransform: 'uppercase',
-                  margin: '8px 0 24px 0',
-                  letterSpacing: '0.02em'
-                }}
-              >
-                Ghazal Highlights of the Curation Cycle
-              </h2>
-
-              <div className="featured-grid">
-                {/* Card 1: Ghazal of the Day */}
-                <article className="featured-card">
-                  <span className="featured-label">[Ghazal of the Day]</span>
-                  <h3 className="featured-card-title">Dil-e-Nadaan Tujhe</h3>
-                  <div className="featured-card-meta">Poet: Mirza Ghalib // Singer: Jagjit Singh</div>
-                  <p className="featured-card-desc">
-                    Mirza Ghalib's timeless inquiry into the naive heart's desires. This rendition by Jagjit & Chitra Singh represents a watershed moment in classical ghazal composition, featuring smooth, minimal acoustic strings and clear, emotional vocal delivery that brings Ghalib's wordplay to life.
-                  </p>
-                  <button
-                    type="button"
-                    className="console-btn console-btn--primary"
-                    onClick={() => activateCuratorSelection('01')}
-                  >
-                    [▶ PLAY SELECTION]
-                  </button>
-                </article>
-
-                {/* Card 2: Ghazal of the Week */}
-                <article className="featured-card">
-                  <span className="featured-label">[Ghazal of the Week]</span>
-                  <h3 className="featured-card-title">Aaj Jaane Ki Zid Na Karo</h3>
-                  <div className="featured-card-meta">Poet: Fayyaz Hashmi // Singer: Farida Khanum</div>
-                  <p className="featured-card-desc">
-                    An iconic song of separation and persistent love. Farida Khanum's legendary rendition captures the sheer longing of the beloved. Her performance shows how classical music uses repetition and vocal modulations to express romantic devotion.
-                  </p>
-                  <button
-                    type="button"
-                    className="console-btn console-btn--primary"
-                    onClick={() => activateCuratorSelection('02')}
-                  >
-                    [▶ PLAY SELECTION]
-                  </button>
-                </article>
-
-                {/* Card 3: Ghazal of the Month */}
-                <article className="featured-card">
-                  <span className="featured-label">[Ghazal of the Month]</span>
-                  <h3 className="featured-card-title">Gulon Mein Rang Bhare</h3>
-                  <div className="featured-card-meta">Poet: Faiz Ahmed Faiz // Singer: Mehdi Hassan</div>
-                  <p className="featured-card-desc">
-                    Penned in prison, Faiz's verses blend the traditional flower-garden romantic motifs with a subtle revolutionary cry for spring. Sung by the king of ghazal Mehdi Hassan, this recording remains a masterclass in classic raag composition.
-                  </p>
-                  <button
-                    type="button"
-                    className="console-btn console-btn--primary"
-                    onClick={() => activateCuratorSelection('03')}
-                  >
-                    [▶ PLAY SELECTION]
-                  </button>
-                </article>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* View 4: YT Music search + streaming */}
-        {currentView === 'YTMUSIC' && (
-          <div className="catalog-deck">
-            <div>
-              <span className="mono-tag" style={{ color: 'var(--color-accent)' }}>
-                YOUTUBE MUSIC · UNOFFICIAL API
-              </span>
-              <h2
-                style={{
-                  fontFamily: 'Space Mono',
-                  fontSize: '1.5rem',
-                  textTransform: 'uppercase',
-                  margin: '8px 0 20px 0',
-                  letterSpacing: '0.02em'
-                }}
-              >
-                Search the World of Ghazals & Qawwalis
-              </h2>
-            </div>
-
-            <form className="catalog-search-row" onSubmit={runYtSearch}>
-              <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-                <Music
-                  size={16}
-                  style={{ position: 'absolute', left: '16px', color: 'var(--color-text-muted)' }}
-                />
-                <input
-                  type="text"
-                  className="console-input"
-                  placeholder="e.g. Mehdi Hassan, Jagjit Singh, Nusrat Fateh Ali Khan..."
-                  value={ytQuery}
-                  onChange={(e) => setYtQuery(e.target.value)}
-                  style={{ paddingLeft: '44px' }}
-                />
-              </div>
-              <button type="submit" className="console-btn console-btn--primary" disabled={ytLoading}>
-                {ytLoading ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
-                <span>{ytLoading ? 'SEARCHING' : 'SEARCH'}</span>
-              </button>
-            </form>
-
-            {ytError && (
-              <div
-                className="explanation-card"
-                style={{ borderColor: 'var(--color-accent)', marginBottom: '20px' }}
-              >
-                <div className="explanation-card-body">{ytError}</div>
               </div>
             )}
 
-            {ytResults.length > 0 && (
-              <div className="yt-results-grid">
-                {ytResults.map((track) => (
+            {filteredWorks.length === 0 ? (
+              <div className="state-block">
+                <span className="state-title">Nothing here matches that.</span>
+                Try another poet, singer or title.
+              </div>
+            ) : (
+              <ul className="work-list">
+                {filteredWorks.map((work, i) => (
+                  <li className="work-row" key={work.id}>
+                    <button
+                      type="button"
+                      className="work-row-main"
+                      onClick={() => void openWork(work, true)}
+                    >
+                      <span className="sher-index">{String(i + 1).padStart(2, '0')}</span>
+                      <span>
+                        <span className="work-title">{work.title}</span>
+                        <span className="work-sub">
+                          {work.poet} &nbsp;·&nbsp; sung by {work.artist}
+                        </span>
+                        <span className="work-meta-row">
+                          {work.mood && <span className="work-mood">{work.mood}</span>}
+                          {readiness[work.id] && (
+                            <span
+                              className={`work-ready work-ready--${
+                                readinessScore(readiness[work.id]) >= 0.7
+                                  ? 'full'
+                                  : readinessScore(readiness[work.id]) >= 0.4
+                                  ? 'part'
+                                  : 'thin'
+                              }`}
+                              title="Measured when this ghazal was last prepared"
+                            >
+                              {describeReadiness(readiness[work.id])}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    </button>
+                    <span className="work-actions">
+                      <button
+                        type="button"
+                        className="text-btn"
+                        onClick={() => void openWork(work, false)}
+                      >
+                        Read
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Kept by you</span>
+                <h3 className="section-title">Your collection</h3>
+              </div>
+            </div>
+
+            {userCatalogItems.length === 0 ? (
+              <p className="state-note">
+                Nothing kept yet — while a recording plays, press the heart to keep it here.
+              </p>
+            ) : (
+              <div className="result-grid">
+                {userCatalogItems.map((entry) => (
                   <div
-                    key={track.videoId}
-                    className={`yt-result-card ${
-                      isYT && ytTrack?.videoId === track.videoId ? 'yt-result-card--active' : ''
+                    key={entry.id}
+                    className={`result-wrap ${
+                      isRecording && ytTrack?.videoId === entry.videoId
+                        ? 'result-wrap--current'
+                        : ''
                     }`}
-                    onClick={() => playYtTrack(track)}
                   >
-                    <div className="yt-result-thumb">
-                      {track.coverUrl ? (
-                        <img src={track.coverUrl} alt={track.title} />
-                      ) : (
-                        <Music size={20} />
-                      )}
-                      <div className="yt-result-play">
-                        <Play size={18} />
-                      </div>
-                    </div>
-                    <div className="yt-result-meta">
-                      <div className="yt-result-title">{track.title}</div>
-                      <div className="item-sub-text">{track.artist}</div>
-                      {track.duration && (
-                        <div className="item-sub-text" style={{ opacity: 0.6 }}>
-                          {track.duration}
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      className="result-card"
+                      onClick={() => playCollected(entry)}
+                    >
+                      <span className="result-art">
+                        {entry.thumbnail ? (
+                          <img src={entry.thumbnail} alt="" loading="lazy" />
+                        ) : (
+                          <Music size={20} aria-hidden="true" />
+                        )}
+                        <span className="result-art-veil">
+                          <Play size={20} aria-hidden="true" />
+                        </span>
+                      </span>
+                      <span>
+                        <span className="result-title">{entry.title}</span>
+                        <span className="result-sub">{entry.artist}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="result-remove"
+                      aria-label={`Remove ${entry.title} from your collection`}
+                      onClick={() => removeCollected(entry.id)}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ------------------------------------------------------ EXPLORE -- */}
+        {currentView === 'EXPLORE' && (
+          <div className="page">
+            <div className="page-head">
+              <span className="eyebrow">Explore</span>
+              <h2 className="page-title">Other voices, other nights</h2>
+              <p className="page-lede">
+                Search for a ghazal, a poet or a singer. The same poetry has been sung many times
+                over — hearing two renditions beside each other is half the pleasure.
+              </p>
+            </div>
+
+            <form className="search-field" onSubmit={runSearch}>
+              <Music size={16} aria-hidden="true" color="var(--color-text-faint)" />
+              <input
+                type="search"
+                aria-label="Search recordings"
+                placeholder="Mehdi Hassan, Farida Khanum, Ranjish hi sahi…"
+                value={ytQuery}
+                onChange={(e) => setYtQuery(e.target.value)}
+              />
+              <button type="submit" className="text-btn" disabled={ytLoading}>
+                {ytLoading ? 'Searching' : 'Search'}
+              </button>
+            </form>
+
+            {!isRecording && activeWork && (
+              <p className="state-note" style={{ marginBottom: 'var(--space-5)' }}>
+                Looking for another rendition of <em>{activeWork.title}</em>?{' '}
+                <button
+                  type="button"
+                  className="text-btn"
+                  onClick={() => exploreSubject(activeWork.title)}
+                >
+                  Search recordings of it
+                </button>
+              </p>
+            )}
+
+            {ytError && (
+              <p className="state-note" style={{ marginBottom: 'var(--space-5)' }}>
+                {ytError}{' '}
+                <button type="button" className="text-btn" onClick={() => runSearch()}>
+                  Try again
+                </button>
+              </p>
+            )}
+
+            {ytLoading && (
+              <p className="state-note">
+                <Loader2 size={14} className="spin" aria-hidden="true" /> Preparing the mehfil…
+              </p>
+            )}
+
+            {!ytLoading && ytResults.length > 0 && (
+              <div className="result-grid">
+                {ytResults.map((track, idx) => (
+                  <div
+                    key={`${track.videoId}-${idx}`}
+                    className={`result-wrap ${
+                      isRecording && ytTrack?.videoId === track.videoId
+                        ? 'result-wrap--current'
+                        : ''
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className="result-card"
+                      onClick={() => playRecording(track)}
+                    >
+                      <span className="result-art">
+                        {track.coverUrl ? (
+                          <img src={track.coverUrl} alt="" loading="lazy" />
+                        ) : (
+                          <Music size={20} aria-hidden="true" />
+                        )}
+                        <span className="result-art-veil">
+                          <Play size={20} aria-hidden="true" />
+                        </span>
+                      </span>
+                      <span>
+                        <span className="result-title">{track.title}</span>
+                        <span className="result-sub">
+                          {track.artist}
+                          {track.duration ? ` · ${track.duration}` : ''}
+                        </span>
+                      </span>
+                    </button>
                   </div>
                 ))}
               </div>
             )}
 
             {!ytLoading && ytResults.length === 0 && !ytError && (
-              <div
-                className="item-sub-text"
-                style={{ textAlign: 'center', padding: '40px', lineHeight: 1.6 }}
-              >
-                Search YouTube Music for any ghazal, qawwali, or artist.
-                <br />
-                Selecting a result loads it onto the Listening Deck — the vinyl spins as it plays.
-                <br />
-                <span style={{ opacity: 0.6 }}>
-                  Requires the local bridge: cd ytmusic-service &amp;&amp; python main.py
-                </span>
+              <div className="state-block">
+                <span className="state-title">The room is quiet.</span>
+                Search above, and whatever you choose begins tonight&rsquo;s mehfil.
               </div>
             )}
+
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">From the curator</span>
+                <h3 className="section-title">Three to begin with</h3>
+              </div>
+            </div>
+
+            <ul className="work-list">
+              {[
+                {
+                  id: '01',
+                  label: 'Ghazal of the day',
+                  note: 'Ghalib turning on his own heart, and Jagjit and Chitra Singh giving the question all the room it needs.',
+                },
+                {
+                  id: '02',
+                  label: 'Ghazal of the week',
+                  note: 'Farida Khanum stretching a single plea across a whole night — the most famous refusal to say goodbye in the language.',
+                },
+                {
+                  id: '03',
+                  label: 'Ghazal of the month',
+                  note: 'Written from a prison cell, sung by Mehdi Hassan as though the garden were still in reach.',
+                },
+              ].map((pick) => {
+                const work = worksList.find((w) => w.id === pick.id)
+                if (!work) return null
+                return (
+                  <li className="work-row" key={pick.id}>
+                    <button
+                      type="button"
+                      className="work-row-main"
+                      onClick={() => void openWork(work, true)}
+                    >
+                      <span className="sher-index">{pick.id}</span>
+                      <span>
+                        <span className="work-mood" style={{ marginTop: 0 }}>
+                          {pick.label}
+                        </span>
+                        <span className="work-title">{work.title}</span>
+                        <span className="work-sub">
+                          {work.poet} &nbsp;·&nbsp; sung by {work.artist}
+                        </span>
+                        <p className="page-lede" style={{ fontSize: '0.95rem', marginTop: 6 }}>
+                          {pick.note}
+                        </p>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
         )}
 
-        {/* Console Footer */}
-        <footer className="footer-section">
-          SHAMA INSTRUMENTS DIGITAL DECK [V1.0.0-PROTOTYPE] // COPPER-BRONZE SHELL SYSTEM // METALLIC STACK COMPLIANT
+        <footer className="room-footer">
+          <span>Shama · a digital mehfil</span>
+          <span>{isStreaming && isPlaying ? 'Playing' : 'Quiet'}</span>
         </footer>
       </div>
     </main>

@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import '../index.css'
 
 export const metadata: Metadata = {
-  title: 'Shama - Poetry Companion',
-  description: 'An industrial modular console for South Asian poetry.',
+  title: 'Shama — a digital mehfil',
+  description: 'Listen to, read and understand ghazals — poetry, music and context in one quiet room.',
 }
 
 export default function RootLayout({

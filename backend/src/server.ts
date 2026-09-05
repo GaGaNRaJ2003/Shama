@@ -1,21 +1,74 @@
+// First import, deliberately: it loads the repo-root .env before any module
+// below reads process.env.
+import './lib/env.js'
 import express from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
 import { supabase, isDbConfigured } from './lib/supabase.js'
-
-dotenv.config()
+import { attachJam, createRoom, roomSummary } from './jam.js'
 
 const app = express()
-const PORT = process.env.PORT || 5000
+// NOT `PORT`: the shared root .env sets PORT=8000 for the Python services, so
+// reading it here would move the API on top of the YT bridge.
+const PORT = Number(process.env.BACKEND_PORT) || 5000
 
 // Location of the Python `ytmusicapi` bridge service (see /ytmusic-service).
-const YT_SERVICE_URL = (process.env.YT_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
+const YT_SERVICE_URL = (process.env.YT_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 
 // Location of the ML Engine (meaning + TTS) service (see /ml-engine).
-const ML_ENGINE_URL = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8001').replace(/\/$/, '')
+const ML_ENGINE_URL = (process.env.ML_ENGINE_URL || 'http://127.0.0.1:8001').replace(/\/+$/, '')
 
-app.use(cors())
-app.use(express.json())
+// Outbound calls need a deadline: undici applies none, so a slow upstream
+// pins an Express request (and its socket) indefinitely.
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS) || 30_000
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 60_000
+const MAX_THUMB_BYTES = 5 * 1024 * 1024
+
+const fetchUpstream = (url: string, init: RequestInit = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) =>
+  fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000,http://127.0.0.1:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
+app.use(
+  cors({
+    // Previously `cors()` — wildcard on every route, including the ones that
+    // spend metered ElevenLabs and LLM credit.
+    origin: (origin, cb) =>
+      !origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(null, false),
+  })
+)
+app.use(express.json({ limit: '64kb' }))
+
+/**
+ * Minimal fixed-window limiter. These routes proxy metered third parties
+ * (ElevenLabs is 10k characters/month) and an unofficial YouTube API that will
+ * ban the host IP, so they cannot stay unauthenticated *and* unlimited.
+ */
+const hits = new Map<string, { count: number; resetAt: number }>()
+const rateLimit = (limit: number, windowMs: number) =>
+  (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const key = `${req.path}|${req.ip}`
+    const now = Date.now()
+    const entry = hits.get(key)
+    if (!entry || entry.resetAt <= now) {
+      hits.set(key, { count: 1, resetAt: now + windowMs })
+      return next()
+    }
+    if (entry.count >= limit) {
+      res.setHeader('Retry-After', Math.ceil((entry.resetAt - now) / 1000))
+      return res.status(429).json({ error: 'Too many requests. Please slow down.' })
+    }
+    entry.count += 1
+    next()
+  }
+
+// Keep the map from growing without bound on a long-lived process.
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k)
+}, 60_000).unref()
 
 // Mock catalog data for fallback mode
 const mockCatalog = [
@@ -151,6 +204,47 @@ const mockCatalog = [
   }
 ]
 
+// ---------------------------------------------------------------------------
+// Mehfil Jam — listen together over a shared link, no accounts.
+// ---------------------------------------------------------------------------
+
+// POST /api/mehfil — start a mehfil. The caller keeps `hostKey` (it is what
+// proves they may drive playback) and shares only the token.
+app.post('/api/mehfil', rateLimit(20, 60_000), (_req, res) => {
+  const { token, hostKey } = createRoom()
+  res.status(201).json({ token, hostKey })
+})
+
+// GET /api/mehfil/:token — does this mehfil exist, and what is playing?
+app.get('/api/mehfil/:token', (req, res) => {
+  const summary = roomSummary(String(req.params.token || '').toLowerCase())
+  if (!summary) return res.status(404).json({ error: 'That mehfil has ended.' })
+  res.json(summary)
+})
+
+// GET /health — liveness for THIS gateway. (/api/ml/health probes a different
+// service, so a load balancer pointed at it was testing the ML engine.)
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'shama-api', db: isDbConfigured })
+})
+
+/**
+ * The catalogue as a brief list. Used when Supabase is unconfigured AND when a
+ * configured Supabase can't answer — the `works` table does not exist on the
+ * current project (`PGRST205`), and a reader should get the catalogue rather
+ * than an error either way.
+ */
+const briefMockWorks = () =>
+  mockCatalog.map((w) => ({
+    id: w.id,
+    title: w.title,
+    artist: w.artist,
+    poet: w.poet,
+    form: w.form,
+    audioUrl: w.audioUrl,
+    coverUrl: w.coverUrl,
+  }))
+
 // API Routes
 app.get('/api/works', async (req, res) => {
   try {
@@ -159,25 +253,17 @@ app.get('/api/works', async (req, res) => {
         .from('works')
         .select('id, title, artist, poet, form, audio_url, cover_url')
       if (error) {
-        throw new Error(error.message)
+        // Configured but unusable (missing table, RLS, outage). Serve the
+        // catalogue rather than failing the page.
+        console.warn('[WORKS] Supabase query failed, serving local catalog:', error.message)
+        return res.json(briefMockWorks())
       }
       return res.json(works)
-    } else {
-      // Fallback mode: map mockCatalog to brief list items
-      const briefWorks = mockCatalog.map(w => ({
-        id: w.id,
-        title: w.title,
-        artist: w.artist,
-        poet: w.poet,
-        form: w.form,
-        audioUrl: w.audioUrl,
-        coverUrl: w.coverUrl
-      }))
-      return res.json(briefWorks)
     }
+    return res.json(briefMockWorks())
   } catch (err: any) {
     console.error('Error fetching works:', err.message)
-    return res.status(500).json({ error: 'Failed to fetch works.' })
+    return res.json(briefMockWorks())
   }
 })
 
@@ -191,8 +277,12 @@ app.get('/api/works/:id', async (req, res) => {
         .select('*')
         .eq('id', id)
         .single()
-      
+
       if (workErr || !work) {
+        // Same reasoning as the list route: fall back rather than 404 a work
+        // the local catalogue can serve perfectly well.
+        const local = mockCatalog.find((w) => w.id === id)
+        if (local) return res.json(local)
         return res.status(404).json({ error: 'Work not found.' })
       }
 
@@ -217,6 +307,8 @@ app.get('/api/works/:id', async (req, res) => {
     }
   } catch (err: any) {
     console.error(`Error fetching work details for ID ${id}:`, err.message)
+    const local = mockCatalog.find((w) => w.id === id)
+    if (local) return res.json(local)
     return res.status(500).json({ error: 'Failed to fetch work details.' })
   }
 })
@@ -227,20 +319,23 @@ app.get('/api/works/:id', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const mlUnavailable = (res: express.Response, err: any) => {
+  // The reason is logged, never returned: this body reaches the browser, and
+  // shell instructions are not something a listener should ever be shown.
   console.error('[ML_BRIDGE] Upstream error:', err?.message || err)
-  return res.status(503).json({
-    error: 'ML Engine unavailable. Start it with: cd ml-engine && python main.py',
+  const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+  return res.status(504 * Number(timedOut) || 503).json({
+    error: timedOut ? 'That took too long. Please try again.' : 'That service is unavailable.',
   })
 }
 
 // POST /api/meaning — Couplet interpretation
-app.post('/api/meaning', async (req, res) => {
+app.post('/api/meaning', rateLimit(30, 60_000), async (req, res) => {
   try {
-    const upstream = await fetch(`${ML_ENGINE_URL}/api/meaning`, {
+    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/meaning`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
-    })
+    }, LLM_TIMEOUT_MS)
     const data = await upstream.json()
     return res.status(upstream.status).json(data)
   } catch (err) {
@@ -249,9 +344,9 @@ app.post('/api/meaning', async (req, res) => {
 })
 
 // POST /api/tts — Text-to-speech narration
-app.post('/api/tts', async (req, res) => {
+app.post('/api/tts', rateLimit(10, 60_000), async (req, res) => {
   try {
-    const upstream = await fetch(`${ML_ENGINE_URL}/api/tts`, {
+    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
@@ -264,9 +359,24 @@ app.post('/api/tts', async (req, res) => {
 })
 
 // POST /api/split-lyrics — Intelligent lyrics couplet segmentation
-app.post('/api/split-lyrics', async (req, res) => {
+app.post('/api/split-lyrics', rateLimit(30, 60_000), async (req, res) => {
   try {
-    const upstream = await fetch(`${ML_ENGINE_URL}/api/split-lyrics`, {
+    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/split-lyrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    })
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return mlUnavailable(res, err)
+  }
+})
+
+// POST /api/align-couplets — derive couplet timings from synced lyrics
+app.post('/api/align-couplets', rateLimit(30, 60_000), async (req, res) => {
+  try {
+    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/align-couplets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
@@ -281,7 +391,7 @@ app.post('/api/split-lyrics', async (req, res) => {
 // GET /api/ml/health — ML Engine health check
 app.get('/api/ml/health', async (req, res) => {
   try {
-    const upstream = await fetch(`${ML_ENGINE_URL}/health`)
+    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/health`, {}, 10_000)
     const data = await upstream.json()
     return res.status(upstream.status).json(data)
   } catch (err) {
@@ -297,19 +407,20 @@ app.get('/api/ml/health', async (req, res) => {
 
 const ytUnavailable = (res: express.Response, err: any) => {
   console.error('[YT_BRIDGE] Upstream error:', err?.message || err)
-  return res.status(503).json({
-    error: 'YT Music service unavailable. Start it with: cd ytmusic-service && python main.py',
+  const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+  return res.status(504 * Number(timedOut) || 503).json({
+    error: timedOut ? 'That took too long. Please try again.' : 'Search is unavailable right now.',
     results: []
   })
 }
 
 // GET /api/yt/search?q=...&limit=...
-app.get('/api/yt/search', async (req, res) => {
+app.get('/api/yt/search', rateLimit(40, 60_000), async (req, res) => {
   const q = String(req.query.q || '').trim()
   if (!q) return res.status(400).json({ error: 'Missing query parameter "q".', results: [] })
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40)
   try {
-    const upstream = await fetch(
+    const upstream = await fetchUpstream(
       `${YT_SERVICE_URL}/search?q=${encodeURIComponent(q)}&limit=${limit}`
     )
     const data = await upstream.json()
@@ -319,10 +430,31 @@ app.get('/api/yt/search', async (req, res) => {
   }
 })
 
+// GET /api/yt/resolve?title=&artist= — which recording IS this ghazal?
+// Returns a `best` only when confident; otherwise candidates for a human to pick.
+app.get('/api/yt/resolve', rateLimit(40, 60_000), async (req, res) => {
+  const title = String(req.query.title || '').trim()
+  if (!title) return res.status(400).json({ error: 'Missing "title".', candidates: [] })
+  const artist = String(req.query.artist || '').trim()
+  try {
+    const params = new URLSearchParams({ title })
+    if (artist) params.set('artist', artist)
+    const upstream = await fetchUpstream(`${YT_SERVICE_URL}/resolve?${params.toString()}`)
+    const data = await upstream.json()
+    return res.status(upstream.status).json(data)
+  } catch (err) {
+    return ytUnavailable(res, err)
+  }
+})
+
 // GET /api/yt/lyrics/search?title=...&artist=... (LRCLIB synced lyrics)
-app.get('/api/yt/lyrics/search', async (req, res) => {
+app.get('/api/yt/lyrics/search', rateLimit(60, 60_000), async (req, res) => {
   const title = String(req.query.title || '').trim()
   const artist = String(req.query.artist || '').trim()
+  // Duration is the strongest signal that an LRC file belongs to THIS
+  // recording rather than another rendition of the same ghazal.
+  const duration = Number(req.query.duration) || 0
+  const album = String(req.query.album || '').trim()
   if (!title && !artist) {
     return res.status(400).json({ error: 'Provide at least title or artist.', hasLyrics: false })
   }
@@ -330,7 +462,9 @@ app.get('/api/yt/lyrics/search', async (req, res) => {
     const params = new URLSearchParams()
     if (title) params.set('title', title)
     if (artist) params.set('artist', artist)
-    const upstream = await fetch(
+    if (duration > 0) params.set('duration', String(duration))
+    if (album) params.set('album', album)
+    const upstream = await fetchUpstream(
       `${YT_SERVICE_URL}/lyrics/search?${params.toString()}`
     )
     const data = await upstream.json()
@@ -343,7 +477,7 @@ app.get('/api/yt/lyrics/search', async (req, res) => {
 // GET /api/yt/lyrics/:videoId
 app.get('/api/yt/lyrics/:videoId', async (req, res) => {
   try {
-    const upstream = await fetch(
+    const upstream = await fetchUpstream(
       `${YT_SERVICE_URL}/lyrics/${encodeURIComponent(req.params.videoId)}`
     )
     const data = await upstream.json()
@@ -356,20 +490,37 @@ app.get('/api/yt/lyrics/:videoId', async (req, res) => {
 // GET /api/yt/thumb?u=<encoded image url>
 // Re-serves a YouTube thumbnail through our origin with permissive CORS so the
 // three.js TextureLoader can use it on the vinyl label without tainting the canvas.
-app.get('/api/yt/thumb', async (req, res) => {
+app.get('/api/yt/thumb', rateLimit(200, 60_000), async (req, res) => {
   const u = String(req.query.u || '')
-  if (!/^https:\/\/[a-z0-9.-]*(ytimg\.com|ggpht\.com|googleusercontent\.com)\//i.test(u)) {
+  // Anchored to a real domain boundary. The previous `[a-z0-9.-]*` matched by
+  // substring, so `https://evil-ytimg.com/payload` was accepted and re-served
+  // from our origin with permissive CORS.
+  if (!/^https:\/\/([a-z0-9-]+\.)*(ytimg\.com|ggpht\.com|googleusercontent\.com)\/[^\s]*$/i.test(u)) {
     return res.status(400).json({ error: 'Only YouTube image hosts are allowed.' })
   }
   try {
-    const upstream = await fetch(u)
+    const upstream = await fetchUpstream(u, {}, 10_000)
     if (!upstream.ok || !upstream.body) {
       return res.status(502).json({ error: 'Failed to fetch thumbnail.' })
     }
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/jpeg')
-    res.setHeader('Cache-Control', 'public, max-age=86400')
+    const declared = Number(upstream.headers.get('content-length') || 0)
+    if (declared > MAX_THUMB_BYTES) {
+      return res.status(413).json({ error: 'Thumbnail too large.' })
+    }
+    const type = upstream.headers.get('content-type') || ''
+    // Never let our origin vouch for non-image bytes.
+    if (!type.startsWith('image/')) {
+      return res.status(415).json({ error: 'Not an image.' })
+    }
     const buffer = Buffer.from(await upstream.arrayBuffer())
+    if (buffer.byteLength > MAX_THUMB_BYTES) {
+      return res.status(413).json({ error: 'Thumbnail too large.' })
+    }
+    // Wildcard is load-bearing here: three.js needs an untainted canvas for
+    // the vinyl label texture.
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Content-Type', type)
+    res.setHeader('Cache-Control', 'public, max-age=86400')
     return res.end(buffer)
   } catch (err) {
     console.error('[YT_THUMB] Error:', (err as any)?.message || err)
@@ -377,8 +528,27 @@ app.get('/api/yt/thumb', async (req, res) => {
   }
 })
 
-app.listen(PORT, () => {
+// A JSON API should not answer with Express's default HTML for these.
+app.use((_req, res) => res.status(404).json({ error: 'Not found.' }))
+
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[SHAMA_API] Unhandled error:', err)
+  res.status(500).json({ error: 'Something went wrong.' })
+})
+
+const server = app.listen(PORT, () => {
   console.log(`[SHAMA_API] Server listening at http://localhost:${PORT}`)
   console.log(`[SHAMA_API] YT Music bridge -> ${YT_SERVICE_URL}`)
   console.log(`[SHAMA_API] ML Engine bridge -> ${ML_ENGINE_URL}`)
+})
+
+// Playback sync rides a WebSocket on the same server/port as the API.
+attachJam(server)
+
+server.on('error', (err: any) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.error(`[SHAMA_API] Port ${PORT} is already in use. Set BACKEND_PORT to another port.`)
+    process.exit(1)
+  }
+  throw err
 })

@@ -1,30 +1,42 @@
 """
 Supabase caching layer for couplet meanings.
 
-Table schema (create in Supabase dashboard):
-    CREATE TABLE couplet_meanings (
-        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-        couplet_hash TEXT NOT NULL,
-        couplet_text TEXT NOT NULL,
-        poet TEXT,
-        language TEXT NOT NULL DEFAULT 'roman',
-        depth TEXT NOT NULL DEFAULT 'simple',
-        meaning_json JSONB NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT now()
-    );
+Written against the schema that is actually deployed (verified via PostgREST):
 
-    CREATE INDEX idx_couplet_hash ON couplet_meanings(couplet_hash);
-    CREATE UNIQUE INDEX idx_couplet_unique ON couplet_meanings(couplet_hash, language, depth);
+    couplet_meanings(
+        id uuid, couplet_hash text, couplet_text text,
+        language text, depth text,
+        meaning_response jsonb,
+        llm_provider text, llm_model text, tokens_used int,
+        created_at timestamptz, updated_at timestamptz, expires_at timestamptz
+    )
+
+Two things this module previously got wrong, both of which failed silently:
+  * it read/wrote `meaning_json` (no such column) and wrote `poet` (no such
+    column), so every store was rejected;
+  * it was handed the anon key, which has no privileges here — anon SELECT
+    returns 42501 "permission denied". Writes need the service-role key.
+
+`expires_at` is honoured, so CACHE_TTL_SECONDS finally means something.
 """
 
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "2592000"))  # 30 days
+
+# One generated response serves the Meaning, Words and Context tabs alike, so
+# every row is stored under a single depth. This keeps the deployed
+# UNIQUE(couplet_hash, language, depth) constraint usable while giving us one
+# row (and one LLM call) per couplet instead of one per tab.
+CACHE_DEPTH = "full"
 
 
 class MeaningCache:
@@ -35,57 +47,94 @@ class MeaningCache:
     def __init__(self, supabase_url: str | None, supabase_key: str | None):
         self.enabled = bool(supabase_url and supabase_key)
         self.client: Client | None = None
+        # Set once a real query succeeds, so /health can report reachability
+        # rather than merely "credentials were present".
+        self.reachable: bool | None = None
+        self.last_error: str | None = None
 
         if self.enabled:
             try:
                 self.client = create_client(supabase_url, supabase_key)
                 logger.info("Supabase cache initialized")
             except Exception as e:
-                logger.warning(f"Supabase initialization failed, caching disabled: {e}")
+                logger.warning("Supabase initialization failed, caching disabled: %s", e)
                 self.enabled = False
+                self.last_error = str(e)[:200]
         else:
             logger.info("Supabase credentials not provided, caching disabled")
 
     @staticmethod
-    def _hash_couplet(couplet: str) -> str:
-        """Create a stable hash for the couplet text (normalized)."""
-        normalized = couplet.strip().lower()
-        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+    def _hash_couplet(couplet: str, language: str) -> str:
+        """Stable key for a couplet.
 
-    def get(self, couplet: str, language: str, depth: str) -> dict | None:
+        Whitespace is collapsed so that "dil-e-nadaan  tujhe" and
+        "dil-e-nadaan tujhe" share a row instead of paying for two LLM calls.
         """
-        Check cache for existing meaning.
-        Returns meaning_json dict if found, None otherwise.
-        """
+        normalized = " ".join(couplet.strip().lower().split())
+        return hashlib.sha256(f"{normalized}|{language}".encode("utf-8")).hexdigest()[:32]
+
+    def verify(self) -> bool:
+        """Prove the table is actually readable. Used by /health."""
+        if not self.enabled or not self.client:
+            self.reachable = False
+            return False
+        try:
+            self.client.table(self.TABLE).select("couplet_hash").limit(1).execute()
+            self.reachable = True
+            self.last_error = None
+        except Exception as e:
+            self.reachable = False
+            self.last_error = str(e)[:200]
+            logger.warning("cache verify failed: %s", e)
+        return bool(self.reachable)
+
+    def get(self, couplet: str, language: str, depth: str = CACHE_DEPTH) -> dict | None:
+        """Return the cached meaning, or None on miss/expiry/error."""
         if not self.enabled:
             return None
 
-        couplet_hash = self._hash_couplet(couplet)
+        couplet_hash = self._hash_couplet(couplet, language)
 
         try:
             response = (
                 self.client.table(self.TABLE)
-                .select("meaning_json")
+                .select("meaning_response, expires_at")
                 .eq("couplet_hash", couplet_hash)
                 .eq("language", language)
                 .eq("depth", depth)
                 .limit(1)
                 .execute()
             )
+            self.reachable = True
 
-            if response.data:
-                logger.info(f"Cache HIT for couplet hash: {couplet_hash[:8]}...")
-                meaning = response.data[0]["meaning_json"]
-                # Handle case where meaning_json is stored as string
-                if isinstance(meaning, str):
-                    return json.loads(meaning)
-                return meaning
+            if not response.data:
+                logger.debug("cache MISS %s", couplet_hash[:8])
+                return None
 
-            logger.debug(f"Cache MISS for couplet hash: {couplet_hash[:8]}...")
-            return None
+            row = response.data[0]
+            expires_at = row.get("expires_at")
+            if expires_at:
+                try:
+                    exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+                    if exp <= datetime.now(timezone.utc):
+                        logger.info("cache EXPIRED %s", couplet_hash[:8])
+                        return None
+                except ValueError:
+                    pass  # unparseable expiry: treat the row as live
+
+            meaning = row.get("meaning_response")
+            if isinstance(meaning, str):
+                meaning = json.loads(meaning)
+            if not isinstance(meaning, dict) or not meaning:
+                return None
+
+            logger.info("cache HIT %s", couplet_hash[:8])
+            return meaning
 
         except Exception as e:
-            logger.warning(f"Cache lookup failed (non-fatal): {e}")
+            self.reachable = False
+            self.last_error = str(e)[:200]
+            logger.warning("cache lookup failed (non-fatal): %s", e)
             return None
 
     def store(
@@ -93,35 +142,48 @@ class MeaningCache:
         couplet: str,
         poet: str | None,
         language: str,
-        depth: str,
         meaning: dict,
+        depth: str = CACHE_DEPTH,
+        provider: str | None = None,
+        model: str | None = None,
     ) -> bool:
-        """
-        Store a generated meaning in cache.
-        Returns True if stored successfully, False otherwise.
+        """Store a generated meaning. Only ever called with a real result.
+
+        Callers must never pass a degraded/error payload here: rows are keyed
+        only by couplet+language and would otherwise mask the real meaning for
+        as long as they live.
         """
         if not self.enabled:
             return False
 
-        couplet_hash = self._hash_couplet(couplet)
+        couplet_hash = self._hash_couplet(couplet, language)
+        expires = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_TTL_SECONDS)
 
         try:
             row = {
                 "couplet_hash": couplet_hash,
                 "couplet_text": couplet.strip(),
-                "poet": poet,
                 "language": language,
                 "depth": depth,
-                "meaning_json": meaning,
+                "meaning_response": meaning,
+                "llm_provider": provider,
+                "llm_model": model,
+                "expires_at": expires.isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
+            # Matches the deployed UNIQUE(couplet_hash, language, depth). Since
+            # one response now serves every reading depth, `depth` is the
+            # constant CACHE_DEPTH — so there is exactly one row per couplet.
             self.client.table(self.TABLE).upsert(
                 row, on_conflict="couplet_hash,language,depth"
             ).execute()
-
-            logger.info(f"Cached meaning for couplet hash: {couplet_hash[:8]}...")
+            self.reachable = True
+            logger.info("cached meaning %s", couplet_hash[:8])
             return True
 
         except Exception as e:
-            logger.warning(f"Cache store failed (non-fatal): {e}")
+            self.reachable = False
+            self.last_error = str(e)[:200]
+            logger.warning("cache store failed (non-fatal): %s", e)
             return False

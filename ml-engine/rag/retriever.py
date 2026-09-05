@@ -11,6 +11,7 @@ Usage:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,9 +21,10 @@ from supabase import create_client, Client
 
 from .config import (
     SUPABASE_URL,
-    SUPABASE_ANON_KEY,
+    SUPABASE_READ_KEY,
     EMBEDDING_MODEL,
     DEFAULT_MATCH_COUNT,
+    MATCH_THRESHOLD,
 )
 
 
@@ -36,14 +38,18 @@ class CoupletMatch:
     similarity: float
 
     def as_context_str(self) -> str:
-        """Format this match as a context string for LLM prompting."""
+        """Format this match as a context string for LLM prompting.
+
+        Deliberately terse: a raw `Similarity: 0.8123` float is noise to the
+        model, and dumping every metadata key pasted whole corpus records
+        (including their own `detailed` readings) into the prompt.
+        """
         parts = [f"Couplet: {self.couplet_text}"]
         if self.poet:
             parts.append(f"Poet: {self.poet}")
-        if self.metadata:
-            for key, value in self.metadata.items():
-                parts.append(f"{key}: {value}")
-        parts.append(f"Similarity: {self.similarity:.4f}")
+        ghazal = self.metadata.get("ghazal") if self.metadata else None
+        if ghazal:
+            parts.append(f"From: {ghazal}")
         return "\n".join(parts)
 
 
@@ -53,12 +59,12 @@ class ShameRetriever:
     def __init__(
         self,
         supabase_url: str = SUPABASE_URL,
-        supabase_key: str = SUPABASE_ANON_KEY,
+        supabase_key: str = SUPABASE_READ_KEY,
         model_name: str = EMBEDDING_MODEL,
     ):
         if not supabase_url or not supabase_key:
             raise ValueError(
-                "SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment."
+                "SUPABASE_URL and SUPABASE_READ_KEY must be set in environment."
             )
         self._supabase: Client = create_client(supabase_url, supabase_key)
         self._model = SentenceTransformer(model_name)
@@ -87,10 +93,14 @@ class ShameRetriever:
         """
         query_embedding = self._embed(query)
 
+        # The deployed function is `search_couplets` (001_initial.sql); the old
+        # `match_couplets` name has never existed on this project, so every
+        # retrieval was silently returning [].
         response = self._supabase.rpc(
-            "match_couplets",
+            "search_couplets",
             {
                 "query_embedding": query_embedding,
+                "match_threshold": MATCH_THRESHOLD,
                 "match_count": match_count,
             },
         ).execute()
@@ -101,8 +111,8 @@ class ShameRetriever:
                 CoupletMatch(
                     id=row["id"],
                     couplet_text=row["couplet_text"],
-                    poet=row.get("poet"),
-                    metadata=row.get("metadata", {}),
+                    poet=row.get("artist") or row.get("poet"),
+                    metadata={"ghazal": row["ghazal_title"]} if row.get("ghazal_title") else {},
                     similarity=row.get("similarity", 0.0),
                 )
             )
@@ -131,8 +141,20 @@ class ShameRetriever:
         return "\n".join(sections)
 
 
-# Module-level convenience function
+# Module-level convenience function.
+# The lock matters: two concurrent cold requests would otherwise both see None
+# and each construct a SentenceTransformer (~90MB) on a 512MB box.
 _retriever: ShameRetriever | None = None
+_retriever_lock = threading.Lock()
+
+
+def _get_retriever() -> ShameRetriever:
+    global _retriever
+    if _retriever is None:
+        with _retriever_lock:
+            if _retriever is None:
+                _retriever = ShameRetriever()
+    return _retriever
 
 
 def retrieve_similar_couplets(
@@ -140,10 +162,7 @@ def retrieve_similar_couplets(
     match_count: int = DEFAULT_MATCH_COUNT,
 ) -> list[CoupletMatch]:
     """Convenience function — initializes retriever on first call."""
-    global _retriever
-    if _retriever is None:
-        _retriever = ShameRetriever()
-    return _retriever.retrieve(query, match_count)
+    return _get_retriever().retrieve(query, match_count)
 
 
 def retrieve_context_for_llm(
@@ -151,10 +170,7 @@ def retrieve_context_for_llm(
     match_count: int = DEFAULT_MATCH_COUNT,
 ) -> str:
     """Convenience function — returns formatted context string for LLM."""
-    global _retriever
-    if _retriever is None:
-        _retriever = ShameRetriever()
-    return _retriever.retrieve_as_context(query, match_count)
+    return _get_retriever().retrieve_as_context(query, match_count)
 
 
 if __name__ == "__main__":

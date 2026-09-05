@@ -1,7 +1,7 @@
+// Must come first: this module reads process.env at evaluation time, and ESM
+// evaluates imports before any statement in the importer.
+import './env.js'
 import { createClient } from '@supabase/supabase-js'
-import dotenv from 'dotenv'
-
-dotenv.config()
 
 const supabaseUrl = process.env.SUPABASE_URL || ''
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || ''

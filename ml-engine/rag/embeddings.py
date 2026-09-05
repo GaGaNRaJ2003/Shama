@@ -1,5 +1,5 @@
 """
-Shama RAG — Embedding Generator & Upserter
+Shama RAG - Embedding Generator & Upserter
 Reads the training corpus JSONL, generates embeddings with all-MiniLM-L6-v2,
 and upserts them into the Supabase couplet_embeddings table in batches.
 
@@ -8,6 +8,7 @@ Usage:
     python embeddings.py              (from ml-engine/rag/)
 """
 
+import argparse
 import json
 import os
 import sys
@@ -94,7 +95,39 @@ def upsert_batch(
     return response
 
 
+def count_existing(supabase: Client) -> int:
+    """How many embedding rows are already stored."""
+    try:
+        res = supabase.table("couplet_embeddings").select("id", count="exact").limit(1).execute()
+        return res.count or 0
+    except Exception as exc:
+        print(f"[WARN] Could not count existing embeddings: {exc}")
+        return 0
+
+
+def clear_existing(supabase: Client) -> None:
+    """Drop every embedding row before a full rebuild.
+
+    `couplet_embeddings` has no unique constraint and the writer below is a
+    plain INSERT, despite this module's docstring saying "upsert". Re-running
+    against a populated table therefore stores every couplet twice, and
+    retrieval starts handing the model the same verse several times over.
+    Embeddings are wholly derived from training_corpus.jsonl, so a rebuild
+    loses nothing.
+    """
+    supabase.table("couplet_embeddings").delete().gte("couplet_text", "").execute()
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Embed the corpus into Supabase")
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Delete existing embeddings first. Required for any re-run: without "
+             "it a populated table would be duplicated rather than updated.",
+    )
+    args = parser.parse_args()
+
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         print("[ERROR] Set SUPABASE_URL and SUPABASE_ANON_KEY environment variables.")
         sys.exit(1)
@@ -121,6 +154,21 @@ def main() -> None:
         print("[ERROR] No records to process.")
         sys.exit(1)
 
+    existing = count_existing(supabase)
+    if existing:
+        if not args.replace:
+            print(
+                f"[ERROR] couplet_embeddings already holds {existing} rows, and this\n"
+                f"        writer INSERTs rather than upserts. Running now would leave\n"
+                f"        {existing + len(records)} rows with every couplet duplicated, and\n"
+                f"        retrieval would return the same verse repeatedly.\n"
+                f"        Re-run with --replace to rebuild the table from the corpus."
+            )
+            sys.exit(1)
+        print(f"[INFO] Removing {existing} existing embedding rows before rebuild...")
+        clear_existing(supabase)
+        print("[INFO] Cleared.")
+
     # Process in batches
     total = len(records)
     for start in range(0, total, UPSERT_BATCH_SIZE):
@@ -129,12 +177,12 @@ def main() -> None:
         texts = [r["couplet_text"] for r in batch]
 
         print(f"[INFO] Embedding batch {start // UPSERT_BATCH_SIZE + 1} "
-              f"({start + 1}–{end} of {total})")
+              f"({start + 1}-{end} of {total})")
         embeddings = generate_embeddings(model, texts)
 
         print(f"[INFO] Upserting batch to Supabase...")
         upsert_batch(supabase, batch, embeddings)
-        print(f"[INFO] ✓ Batch upserted successfully.")
+        print(f"[INFO] Batch upserted successfully.")
 
     print(f"\n[DONE] All {total} couplets embedded and stored in Supabase.")
 

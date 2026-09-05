@@ -4,10 +4,10 @@
 
 mirza-ghalib
 faiz-ahmad-faiz
-ahmed-faraz
-mir-taqi-mir
+ahmad-faraz
+meer-taqi-meer
 allama-iqbal
-jaun-elia
+jaun-eliya
 parveen-shakir
 gulzar
 sahir-ludhianvi
@@ -16,9 +16,9 @@ momin-khan-momin
 dagh-dehlvi
 hasrat-mohani
 firaq-gorakhpuri
-wali-dakhani
+wali-mohammad-wali
 ibn-e-insha
 qateel-shifai
 nida-fazli
 bashir-badr
-munir-niazi
+muneer-niyazi
