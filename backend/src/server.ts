@@ -47,9 +47,12 @@ app.use(express.json({ limit: '64kb' }))
  * ban the host IP, so they cannot stay unauthenticated *and* unlimited.
  */
 const hits = new Map<string, { count: number; resetAt: number }>()
-const rateLimit = (limit: number, windowMs: number) =>
+// Buckets are keyed by route name, not req.path: Express matches routes
+// case-insensitively and with an optional trailing slash, so keying on the
+// spelling handed every variant of a path its own fresh bucket.
+const rateLimit = (name: string, limit: number, windowMs: number) =>
   (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const key = `${req.path}|${req.ip}`
+    const key = `${name}|${req.ip}`
     const now = Date.now()
     const entry = hits.get(key)
     if (!entry || entry.resetAt <= now) {
@@ -210,7 +213,7 @@ const mockCatalog = [
 
 // POST /api/mehfil — start a mehfil. The caller keeps `hostKey` (it is what
 // proves they may drive playback) and shares only the token.
-app.post('/api/mehfil', rateLimit(20, 60_000), (_req, res) => {
+app.post('/api/mehfil', rateLimit('mehfil-create', 20, 60_000), (_req, res) => {
   const { token, hostKey } = createRoom()
   res.status(201).json({ token, hostKey })
 })
@@ -329,7 +332,7 @@ const mlUnavailable = (res: express.Response, err: any) => {
 }
 
 // POST /api/meaning — Couplet interpretation
-app.post('/api/meaning', rateLimit(30, 60_000), async (req, res) => {
+app.post('/api/meaning', rateLimit('meaning', 30, 60_000), async (req, res) => {
   try {
     const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/meaning`, {
       method: 'POST',
@@ -344,11 +347,13 @@ app.post('/api/meaning', rateLimit(30, 60_000), async (req, res) => {
 })
 
 // POST /api/tts — Text-to-speech narration
-app.post('/api/tts', rateLimit(10, 60_000), async (req, res) => {
+app.post('/api/tts', rateLimit('tts', 10, 60_000), async (req, res) => {
   try {
     const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/tts`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // Every call reaches the ML engine from this process, so without the
+      // real client its limiter is one bucket shared by every listener.
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': req.ip || '' },
       body: JSON.stringify(req.body),
     })
     const data = await upstream.json()
@@ -359,7 +364,7 @@ app.post('/api/tts', rateLimit(10, 60_000), async (req, res) => {
 })
 
 // POST /api/split-lyrics — Intelligent lyrics couplet segmentation
-app.post('/api/split-lyrics', rateLimit(30, 60_000), async (req, res) => {
+app.post('/api/split-lyrics', rateLimit('split-lyrics', 30, 60_000), async (req, res) => {
   try {
     const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/split-lyrics`, {
       method: 'POST',
@@ -374,7 +379,7 @@ app.post('/api/split-lyrics', rateLimit(30, 60_000), async (req, res) => {
 })
 
 // POST /api/align-couplets — derive couplet timings from synced lyrics
-app.post('/api/align-couplets', rateLimit(30, 60_000), async (req, res) => {
+app.post('/api/align-couplets', rateLimit('align-couplets', 30, 60_000), async (req, res) => {
   try {
     const upstream = await fetchUpstream(`${ML_ENGINE_URL}/api/align-couplets`, {
       method: 'POST',
@@ -415,7 +420,7 @@ const ytUnavailable = (res: express.Response, err: any) => {
 }
 
 // GET /api/yt/search?q=...&limit=...
-app.get('/api/yt/search', rateLimit(40, 60_000), async (req, res) => {
+app.get('/api/yt/search', rateLimit('yt-search', 40, 60_000), async (req, res) => {
   const q = String(req.query.q || '').trim()
   if (!q) return res.status(400).json({ error: 'Missing query parameter "q".', results: [] })
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 40)
@@ -432,7 +437,7 @@ app.get('/api/yt/search', rateLimit(40, 60_000), async (req, res) => {
 
 // GET /api/yt/resolve?title=&artist= — which recording IS this ghazal?
 // Returns a `best` only when confident; otherwise candidates for a human to pick.
-app.get('/api/yt/resolve', rateLimit(40, 60_000), async (req, res) => {
+app.get('/api/yt/resolve', rateLimit('yt-resolve', 40, 60_000), async (req, res) => {
   const title = String(req.query.title || '').trim()
   if (!title) return res.status(400).json({ error: 'Missing "title".', candidates: [] })
   const artist = String(req.query.artist || '').trim()
@@ -448,7 +453,7 @@ app.get('/api/yt/resolve', rateLimit(40, 60_000), async (req, res) => {
 })
 
 // GET /api/yt/lyrics/search?title=...&artist=... (LRCLIB synced lyrics)
-app.get('/api/yt/lyrics/search', rateLimit(60, 60_000), async (req, res) => {
+app.get('/api/yt/lyrics/search', rateLimit('yt-lyrics-search', 60, 60_000), async (req, res) => {
   const title = String(req.query.title || '').trim()
   const artist = String(req.query.artist || '').trim()
   // Duration is the strongest signal that an LRC file belongs to THIS
@@ -475,10 +480,16 @@ app.get('/api/yt/lyrics/search', rateLimit(60, 60_000), async (req, res) => {
 })
 
 // GET /api/yt/lyrics/:videoId
-app.get('/api/yt/lyrics/:videoId', async (req, res) => {
+app.get('/api/yt/lyrics/:videoId', rateLimit('yt-lyrics-video', 60, 60_000), async (req, res) => {
+  const videoId = String(req.params.videoId || '')
+  // A YouTube video id is exactly this shape; anything else is not worth a
+  // round-trip to the bridge.
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    return res.status(400).json({ error: 'Invalid video id.', hasLyrics: false })
+  }
   try {
     const upstream = await fetchUpstream(
-      `${YT_SERVICE_URL}/lyrics/${encodeURIComponent(req.params.videoId)}`
+      `${YT_SERVICE_URL}/lyrics/${encodeURIComponent(videoId)}`
     )
     const data = await upstream.json()
     return res.status(upstream.status).json(data)
@@ -490,7 +501,7 @@ app.get('/api/yt/lyrics/:videoId', async (req, res) => {
 // GET /api/yt/thumb?u=<encoded image url>
 // Re-serves a YouTube thumbnail through our origin with permissive CORS so the
 // three.js TextureLoader can use it on the vinyl label without tainting the canvas.
-app.get('/api/yt/thumb', rateLimit(200, 60_000), async (req, res) => {
+app.get('/api/yt/thumb', rateLimit('yt-thumb', 200, 60_000), async (req, res) => {
   const u = String(req.query.u || '')
   // Anchored to a real domain boundary. The previous `[a-z0-9.-]*` matched by
   // substring, so `https://evil-ytimg.com/payload` was accepted and re-served
@@ -512,10 +523,22 @@ app.get('/api/yt/thumb', rateLimit(200, 60_000), async (req, res) => {
     if (!type.startsWith('image/')) {
       return res.status(415).json({ error: 'Not an image.' })
     }
-    const buffer = Buffer.from(await upstream.arrayBuffer())
-    if (buffer.byteLength > MAX_THUMB_BYTES) {
-      return res.status(413).json({ error: 'Thumbnail too large.' })
+    // Counted as it arrives: with no (or an understated) content-length, the
+    // whole body used to be buffered before the size check could run.
+    const reader = upstream.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_THUMB_BYTES) {
+        await reader.cancel()
+        return res.status(413).json({ error: 'Thumbnail too large.' })
+      }
+      chunks.push(value)
     }
+    const buffer = Buffer.concat(chunks)
     // Wildcard is load-bearing here: three.js needs an untainted canvas for
     // the vinyl label texture.
     res.setHeader('Access-Control-Allow-Origin', '*')

@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 
 from .config import (
     SUPABASE_URL,
@@ -66,7 +66,11 @@ class ShameRetriever:
             raise ValueError(
                 "SUPABASE_URL and SUPABASE_READ_KEY must be set in environment."
             )
-        self._supabase: Client = create_client(supabase_url, supabase_key)
+        # Retrieval is optional context: a short timeout keeps a stalled RPC
+        # from outlasting the gateway's 60s (supabase-py defaults to 120s).
+        self._supabase: Client = create_client(
+            supabase_url, supabase_key, options=ClientOptions(postgrest_client_timeout=5)
+        )
         self._model = SentenceTransformer(model_name)
 
     def _embed(self, text: str) -> list[float]:

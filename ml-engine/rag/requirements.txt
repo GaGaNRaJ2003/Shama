@@ -2,7 +2,7 @@
 # Install: pip install -r requirements.txt
 
 # Supabase Python client
-supabase==2.15.0
+supabase==2.31.0
 
 # Sentence Transformers (local embedding model, no API cost)
 sentence-transformers==3.3.1

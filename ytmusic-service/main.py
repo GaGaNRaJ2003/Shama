@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -50,7 +51,13 @@ def get_client() -> YTMusic:
     for candidate in ("browser.json", "oauth.json", "headers_auth.json"):
         path = os.path.join(here, candidate)
         if os.path.exists(path):
-            return YTMusic(path)
+            try:
+                return YTMusic(path)
+            except Exception as exc:
+                # A header file ytmusicapi rejects (it raises on an oauth.json
+                # passed as a path) must not take every route down with it.
+                print(f"[yt] ignoring {candidate} ({type(exc).__name__}); using the unauthenticated client")
+                return YTMusic()
     return YTMusic()
 
 
@@ -117,6 +124,22 @@ def _score_recording(song: dict[str, Any], title: str, artist: str) -> float:
     return round(0.72 * title_sim + 0.28 * artist_sim, 3)
 
 
+# Autoplay also needs each half to hold up on its own. The weighted score alone
+# let a different song by the right singer through (a 0.47 title match), and
+# the right song by a different singer.
+_RESOLVE_TITLE_FLOOR = 0.8
+_RESOLVE_ARTIST_FLOOR = 0.6
+
+
+def _is_confident(song: dict[str, Any], title: str, artist: str) -> bool:
+    """Would we play this recording without asking?"""
+    if _similarity(song.get("title", ""), title) < _RESOLVE_TITLE_FLOOR:
+        return False
+    if artist and _similarity(song.get("artist", ""), artist) < _RESOLVE_ARTIST_FLOOR:
+        return False
+    return _score_recording(song, title, artist) >= _RESOLVE_FLOOR
+
+
 @app.get("/resolve")
 def resolve(
     title: str = Query(..., min_length=1, description="Ghazal title we want"),
@@ -154,11 +177,13 @@ def resolve(
     if not scored:
         return {"best": None, "confidence": 0.0, "candidates": [], "query": query}
 
-    top_score, top = scored[0]
-    confident = top_score >= _RESOLVE_FLOOR
+    top_score = scored[0][0]
+    # The top score alone is not a licence to play: take the first candidate
+    # that also clears the title and artist floors, or let a human choose.
+    best_pair = next(((s, song) for s, song in scored if _is_confident(song, title, artist)), None)
     return {
-        "best": top if confident else None,
-        "confidence": top_score,
+        "best": best_pair[1] if best_pair else None,
+        "confidence": best_pair[0] if best_pair else top_score,
         "candidates": [{**song, "confidence": score} for score, song in scored],
         "query": query,
     }
@@ -251,6 +276,11 @@ def _norm_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Containment only counts when the shorter side is substantial: at least three
+# words, or at least this share of the longer side's words.
+_CONTAIN_MIN_COVERAGE = 0.5
+
+
 def _similarity(a: str, b: str) -> float:
     from difflib import SequenceMatcher
 
@@ -259,8 +289,13 @@ def _similarity(a: str, b: str) -> float:
         return 0.0
     ratio = SequenceMatcher(None, na, nb).ratio()
     # Containment counts: "aaj jaane ki zid na karo" inside a longer official
-    # title should not be punished for the extra words.
-    if na in nb or nb in na:
+    # title should not be punished for the extra words. On whole words, though:
+    # a raw substring test scored "aa" (inside "aaj") or a lone "karo" at 0.9.
+    ta, tb = na.split(), nb.split()
+    short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    n = len(short)
+    contained = any(long_[k:k + n] == short for k in range(len(long_) - n + 1))
+    if contained and (n >= 3 or n / len(long_) >= _CONTAIN_MIN_COVERAGE):
         ratio = max(ratio, 0.9)
     return ratio
 
@@ -270,6 +305,9 @@ _TITLE_FLOOR = 0.60
 # And the combined evidence has to clear a bar too, so we never hand back the
 # words of an unrelated song just because nothing better turned up.
 _SCORE_FLOOR = 0.45
+# Synced lyrics win only from the same song: a synced row must be within this
+# much title similarity of the best row to be preferred over it.
+_SAME_SONG_MARGIN = 0.05
 
 
 def _score_candidate(item: dict[str, Any], title: str, artist: str, duration: float | None) -> float:
@@ -304,6 +342,10 @@ def lyrics_search(
     if not title and not artist:
         raise HTTPException(status_code=400, detail="Provide at least title or artist.")
 
+    # One budget for every LRCLIB call below, kept under the gateway's 30s: an
+    # answer that arrives after the gateway has given up reaches nobody.
+    deadline = time.monotonic() + 20
+
     # The artist arrives comma-joined ("A, B & C"); the leading name is the
     # useful search token and the rest is noise to a fuzzy index.
     primary_artist = re.split(r"[,&]| feat| ft\.", artist, maxsplit=1)[0].strip() if artist else ""
@@ -314,16 +356,23 @@ def lyrics_search(
 
     results: list[dict[str, Any]] = []
     seen: set[Any] = set()
+    # Kept per query: the renditions lookup would ask LRCLIB the title-only
+    # question again, so it reuses these rows instead.
+    rows_by_query: dict[str, list[dict[str, Any]]] = {}
     for q in [q for q in dict.fromkeys(queries) if q]:
+        if time.monotonic() >= deadline:
+            break
         try:
             resp = requests.get(
                 "https://lrclib.net/api/search",
                 params={"q": q},
                 headers={"User-Agent": "Shama/1.0 (https://github.com/shama)"},
-                timeout=20,
+                timeout=(3.05, max(1.0, min(8.0, deadline - time.monotonic()))),
             )
             resp.raise_for_status()
-            for item in resp.json() or []:
+            rows = resp.json() or []
+            rows_by_query[q] = rows
+            for item in rows:
                 if item.get("id") not in seen:
                     seen.add(item.get("id"))
                     results.append(item)
@@ -333,8 +382,9 @@ def lyrics_search(
         if results and len(results) >= 10:
             break
 
+    title_rows = rows_by_query.get(_norm_text(title))
     if not results:
-        return _no_lyrics(_other_renditions(title, artist))
+        return _no_lyrics(_other_renditions(title, artist, rows=title_rows, deadline=deadline))
 
     dur = duration or None
     scored = sorted(
@@ -342,16 +392,30 @@ def lyrics_search(
         key=lambda pair: pair[0],
         reverse=True,
     )
-    scored = [(s, i) for s, i in scored if s >= _SCORE_FLOOR]
+    # A row with no words cannot be the answer: LRCLIB flags instrumentals, and
+    # choosing one returned hasLyrics with nothing to read, which also kept the
+    # client from falling back to YouTube Music's lyrics.
+    scored = [
+        (s, i) for s, i in scored
+        if s >= _SCORE_FLOOR and not i.get("instrumental")
+        and (i.get("syncedLyrics") or i.get("plainLyrics"))
+    ]
     if not scored:
         # Nothing clears the bar for THIS recording — but the poem may still be
         # available through another singer.
-        return _no_lyrics(_other_renditions(title, artist))
+        return _no_lyrics(_other_renditions(title, artist, rows=title_rows, deadline=deadline))
 
     # Prefer the best-scoring candidate that actually has synced lyrics; fall
-    # back to the best plain-lyrics one rather than accepting a poor sync.
-    best_synced = next((pair for pair in scored if pair[1].get("syncedLyrics")), None)
+    # back to the best plain-lyrics one rather than accepting a poor sync. Only
+    # a synced row of the same song counts: a different, shorter title that
+    # happens to be synced must not beat the right song's plain words.
     best_any = scored[0]
+    best_title = _similarity(best_any[1].get("trackName", ""), title) if title else 0.5
+    best_synced = next(
+        (pair for pair in scored if pair[1].get("syncedLyrics")
+         and (not title or _similarity(pair[1].get("trackName", ""), title) >= best_title - _SAME_SONG_MARGIN)),
+        None,
+    )
     score, best = best_synced or best_any
 
     synced_lines: list[dict[str, Any]] = []
@@ -372,7 +436,7 @@ def lyrics_search(
         "lyrics": best.get("plainLyrics") or "",
         "syncedLines": synced_lines,
         # When this recording has no usable timings, point at renditions that do.
-        "otherRenditions": _other_renditions(title, artist) if not synced_lines else [],
+        "otherRenditions": _other_renditions(title, artist, rows=title_rows, deadline=deadline) if not synced_lines else [],
         "source": "lrclib",
         "trackName": best.get("trackName", ""),
         "artistName": best.get("artistName", ""),
@@ -399,29 +463,37 @@ def _no_lyrics(other_renditions: list[dict[str, Any]] | None = None) -> dict[str
     }
 
 
-def _other_renditions(title: str, exclude_artist: str = "", limit: int = 5) -> list[dict[str, Any]]:
+def _other_renditions(title: str, exclude_artist: str = "", limit: int = 5,
+                      rows: list[dict[str, Any]] | None = None,
+                      deadline: float | None = None) -> list[dict[str, Any]]:
     """Recordings of the SAME song, by anyone, that do have words.
 
     A ghazal is a poem: every singer performs the same verse. So when this
     particular recording has no lyrics, another rendition's words are still the
     right words — only the timings belong to that other performance. Offering
     them beats a dead end, as long as we are honest about the swap.
+
+    `rows` are LRCLIB results for this title that the caller already holds;
+    LRCLIB is asked only without them. `deadline` (time.monotonic()) is the
+    caller's budget and bounds that request the same way.
     """
     q = _norm_text(title)
     if not q:
         return []
-    try:
-        resp = requests.get(
-            "https://lrclib.net/api/search",
-            params={"q": q},
-            headers={"User-Agent": "Shama/1.0 (https://github.com/shama)"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        rows = resp.json() or []
-    except Exception as exc:
-        print(f"[lrclib] rendition lookup failed for {title!r}: {exc}")
-        return []
+    if rows is None:
+        timeout = 15 if deadline is None else (3.05, max(1.0, min(8.0, deadline - time.monotonic())))
+        try:
+            resp = requests.get(
+                "https://lrclib.net/api/search",
+                params={"q": q},
+                headers={"User-Agent": "Shama/1.0 (https://github.com/shama)"},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            rows = resp.json() or []
+        except Exception as exc:
+            print(f"[lrclib] rendition lookup failed for {title!r}: {exc}")
+            return []
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -451,8 +523,10 @@ def _other_renditions(title: str, exclude_artist: str = "", limit: int = 5) -> l
 
 @app.get("/lyrics/{video_id}")
 def lyrics(video_id: str) -> dict[str, Any]:
-    client = get_client()
     try:
+        # Inside the try: a client that cannot be built is one more reason
+        # there are no lyrics, not a bare 500.
+        client = get_client()
         watch = client.get_watch_playlist(videoId=video_id)
         browse_id = watch.get("lyrics")
         if not browse_id:

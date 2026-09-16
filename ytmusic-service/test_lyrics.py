@@ -12,7 +12,7 @@ These cover the defects that made lyrics fail to sync:
 
 import sys
 
-from main import _parse_lrc, _score_candidate, _norm_text, _similarity, _score_recording, _RESOLVE_FLOOR
+from main import _parse_lrc, _score_candidate, _norm_text, _similarity, _score_recording, _RESOLVE_FLOOR, _is_confident
 
 FAILURES: list[str] = []
 
@@ -154,6 +154,207 @@ live = {"title": "Baat Karni Mujhe Mushkil (Live)", "artist": "Mehdi Hassan"}
 check_true("a live upload of the right ghazal still autoplays",
            _score_recording(live, WANT_T, WANT_A) >= _RESOLVE_FLOOR,
            f"(scored {_score_recording(live, WANT_T, WANT_A)})")
+
+print("\n-- Resolve gate ----------------------------------------------------")
+
+# Autoplay needs the title AND the singer to hold up on their own; a good
+# weighted score is not enough. The last two are live results for catalogue
+# works 07 and 09: the right ghazal, sung by someone else.
+NOT_CONFIDENT = [
+    ("Mujhe Kar Dena Deewana", "Mehdi Hassan", "Tujhe Yaad Na Meri Aayi", "Mehdi Hassan"),
+    ("Tujhe Yaad Na Meri Ayee - 2", "B Praak, Jaani, Jatin-Lalit", "Tujhe Yaad Na Meri Aayi", "Mehdi Hassan"),
+    ("Mushkil", "Arijit Singh", "Baat Karni Mujhe Mushkil", "Mehdi Hassan"),
+    ("Aa", "Some Artist", "Aaj Jaane Ki Zid Na Karo", "Farida Khanum"),
+    ("Karo", "Some Artist", "Aaj Jaane Ki Zid Na Karo", "Farida Khanum"),
+    ("Tu Meri Zindagi He", "Mehdi Hassan", "Gulon Mein Rang Bhare", "Mehdi Hassan"),
+    ("Chupke Chupke", "Other Singer", "Chupke Chupke Raat Din", "Ghulam Ali"),
+    ("Koi Umeed Bar Nahin Aati", "Noor Jehan", "Koi Umeed Bar Nahin Aati", "Mehdi Hassan"),
+    ("Who Jo Hum Mein Tum Mein Qarar Tha", "Ustad Ahmed Hussain", "Wo Jo Hum Mein Tum Mein Qarar Tha", "Abida Parveen"),
+]
+for got_t, got_a, want_t, want_a in NOT_CONFIDENT:
+    check_true(f"not autoplayed: {got_t!r} / {got_a!r} for {want_t!r}",
+               not _is_confident({"title": got_t, "artist": got_a}, want_t, want_a))
+
+# The right recording must still play without asking: exact titles, live
+# uploads, and the spellings YouTube Music really returns (the last three were
+# captured from the live service).
+CONFIDENT = [
+    ("Tujhe Yaad Na Meri Aayi", "Mehdi Hassan", "Tujhe Yaad Na Meri Aayi", "Mehdi Hassan"),
+    ("Baat Karni Mujhe Mushkil", "Mehdi Hassan", "Baat Karni Mujhe Mushkil", "Mehdi Hassan"),
+    ("Aaj Jaane Ki Zid Na Karo", "Farida Khanum", "Aaj Jaane Ki Zid Na Karo", "Farida Khanum"),
+    ("Gulon Mein Rang Bhare", "Mehdi Hassan", "Gulon Mein Rang Bhare", "Mehdi Hassan"),
+    ("Chupke Chupke Raat Din", "Ghulam Ali", "Chupke Chupke Raat Din", "Ghulam Ali"),
+    ("Koi Umeed Bar Nahin Aati", "Mehdi Hassan", "Koi Umeed Bar Nahin Aati", "Mehdi Hassan"),
+    ("Wo Jo Hum Mein Tum Mein Qarar Tha", "Abida Parveen", "Wo Jo Hum Mein Tum Mein Qarar Tha", "Abida Parveen"),
+    ("Baat Karni Mujhe Mushkil (Live)", "Mehdi Hassan", "Baat Karni Mujhe Mushkil", "Mehdi Hassan"),
+    ("Aaj Jaane Ki Zid Na Karo (Live at Royal Albert Hall)", "Farida Khanum", "Aaj Jaane Ki Zid Na Karo", "Farida Khanum"),
+    ("Dil-E-Nadaan Tujhe Hua Kya Hai", "Jagjit Singh, Chitra Singh", "Dil-e-Nadaan Tujhe Hua Kya Hai", "Jagjit & Chitra Singh"),
+    ("Hazaron Khwahishen Aisi", "Jagjit Singh", "Hazaaron Khwahishein Aisi", "Jagjit Singh"),
+    ("Mujh Se Pehli Si Mohabbat", "Noor Jahan", "Mujhse Pehli Si Mohabbat", "Noor Jehan"),
+    ("Ranjish Hi Sahi", "Mehdi Hassan, Ahmad Faraz", "Ranjish Hi Sahi", "Mehdi Hassan"),
+    ("Dil-e-naadaan Tujhe Hua Kya Hai", "Jagjit Singh, Chitra Singh", "Dil-e-Nadaan Tujhe Hua Kya Hai", "Jagjit & Chitra Singh"),
+    ("Aaj Jane Ki Zid Na Karo", "Farida Khanum", "Aaj Jaane Ki Zid Na Karo", "Farida Khanum"),
+    ("Hazaaron Khwaahishein Aisi", "Jagjit Singh", "Hazaaron Khwahishein Aisi", "Jagjit Singh"),
+]
+for got_t, got_a, want_t, want_a in CONFIDENT:
+    check_true(f"autoplayed: {got_t!r} / {got_a!r} for {want_t!r}",
+               _is_confident({"title": got_t, "artist": got_a}, want_t, want_a))
+
+print("\n-- LRCLIB selection ------------------------------------------------")
+
+import main  # the module the names above came from; requests.get is swapped per call
+
+
+class FakeResponse:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._rows
+
+
+def search_with(rows, title, artist, duration):
+    """lyrics_search against canned LRCLIB rows, with no network.
+
+    Every argument is passed explicitly: outside a request the parameter
+    defaults are FastAPI Query objects, not values.
+    """
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append({"q": (params or {}).get("q"), "timeout": timeout})
+        return FakeResponse(rows)
+
+    real_get = main.requests.get
+    main.requests.get = fake_get
+    try:
+        return main.lyrics_search(title=title, artist=artist, duration=duration, album=""), calls
+    finally:
+        main.requests.get = real_get
+
+
+INSTRUMENTAL = {"id": 1, "trackName": "Aashiq Ke Liye Yaksan", "artistName": "Farida Khanum",
+                "duration": 316, "instrumental": True, "plainLyrics": None, "syncedLyrics": None}
+PLAIN = {"id": 2, "trackName": "Aashiq Ke Liye Yaksan", "artistName": "Farida Khanum",
+         "duration": 290, "instrumental": False, "plainLyrics": "the words", "syncedLyrics": None}
+
+# Previously hasLyrics True with '' words, which also stopped the client from
+# falling back to YouTube Music's lyrics.
+r, calls = search_with([INSTRUMENTAL], "Aashiq Ke Liye Yaksan", "Farida Khanum", 316)
+check("instrumental-only match is no lyrics", r["hasLyrics"], False)
+check_true("... in 2 LRCLIB calls (the renditions lookup reuses the title query)",
+           len(calls) == 2, f"(made {len(calls)})")
+
+r, _ = search_with([INSTRUMENTAL, PLAIN], "Aashiq Ke Liye Yaksan", "Farida Khanum", 316)
+check("instrumental outranking plain words yields the words", r["lyrics"], "the words")
+
+# A different, shorter synced title must not beat the right song's plain words.
+r, _ = search_with([
+    {"id": 10, "trackName": "Chupke Chupke Raat Din", "artistName": "Ghulam Ali", "duration": None,
+     "plainLyrics": "right words", "syncedLyrics": None},
+    {"id": 11, "trackName": "Chupke Chupke", "artistName": "Other Singer", "duration": 200,
+     "plainLyrics": "other words", "syncedLyrics": "[00:01.00]other words"},
+], "Chupke Chupke Raat Din", "Ghulam Ali", 0)
+check("different synced song loses to the right plain words",
+      (r["artistName"], r["lyrics"], r["syncedLines"]), ("Ghulam Ali", "right words", []))
+
+# One word of the title is not the title.
+r, _ = search_with([
+    {"id": 20, "trackName": "Karo", "artistName": "Another Artist", "duration": 120,
+     "plainLyrics": "x", "syncedLyrics": "[00:01.00]x"},
+    {"id": 21, "trackName": "Zid", "artistName": "Another Artist", "duration": 120,
+     "plainLyrics": "y", "syncedLyrics": "[00:01.00]y"},
+], "Aaj Jaane Ki Zid Na Karo", "Farida Khanum", 453)
+check("one-word titles inside the ghazal's name are not it", r["hasLyrics"], False)
+
+# The same song's synced rendition still wins, but its timings are not trusted.
+r, _ = search_with([
+    {"id": 40, "trackName": "Ranjish Hi Sahi", "artistName": "Mehdi Hassan", "duration": 372,
+     "plainLyrics": "plain", "syncedLyrics": None},
+    {"id": 41, "trackName": "Ranjish Hi Sahi", "artistName": "Mehdi Hassan", "duration": 559,
+     "plainLyrics": "synced", "syncedLyrics": "[00:01.00]synced"},
+], "Ranjish Hi Sahi", "Mehdi Hassan", 372)
+check("same song's synced rendition is still preferred",
+      (bool(r["syncedLines"]), r["matchedDuration"]), (True, 559))
+check("... with timingReliable False", r["timingReliable"], False)
+
+# Previously 3 calls: the renditions lookup re-ran the title-only query.
+r, calls = search_with([], "Nothing Like This", "Nobody", 300)
+check("total miss is no lyrics", r["hasLyrics"], False)
+check_true("total miss makes 2 LRCLIB calls, not 3", len(calls) == 2,
+           f"(made {len(calls)}: {[c['q'] for c in calls]})")
+check_true("each call has a (connect, read) timeout within the budget",
+           all(isinstance(c["timeout"], tuple) and c["timeout"][1] <= 8.0 for c in calls),
+           f"({[c['timeout'] for c in calls]})")
+
+
+# The shared deadline: a first query that eats the budget stops the loop, and
+# the renditions lookup after it gets only the 1s read floor, which keeps the
+# total under the gateway's 30s.
+class FakeClock:
+    now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+
+clock = FakeClock()
+slow_calls = []
+
+
+def slow_get(url, params=None, headers=None, timeout=None):
+    slow_calls.append(timeout)
+    clock.now += 25  # this request "took" 25s, then failed
+    raise main.requests.Timeout("simulated")
+
+
+real_get, real_time = main.requests.get, main.time
+main.requests.get, main.time = slow_get, clock
+try:
+    r = main.lyrics_search(title="Ranjish Hi Sahi", artist="Mehdi Hassan", duration=372, album="")
+finally:
+    main.requests.get, main.time = real_get, real_time
+check("past the deadline: no second query, renditions lookup on the 1s floor",
+      slow_calls, [(3.05, 8.0), (3.05, 1.0)])
+check("... and the answer is still a clean no-lyrics", r["hasLyrics"], False)
+
+print("\n-- YT client resilience --------------------------------------------")
+
+
+# A header file ytmusicapi rejects must fall back to the unauthenticated
+# client instead of breaking every route.
+class FakeYTMusic:
+    def __init__(self, auth=None):
+        if auth is not None:
+            raise ValueError("unsupported header file")
+        self.auth = auth
+
+
+real_ytmusic, real_exists = main.YTMusic, main.os.path.exists
+main.YTMusic = FakeYTMusic
+main.os.path.exists = lambda p: p.endswith("oauth.json")
+try:
+    client = main.get_client.__wrapped__()  # bypass lru_cache so nothing fake is memoised
+finally:
+    main.YTMusic, main.os.path.exists = real_ytmusic, real_exists
+check_true("a rejected header file falls back to the unauthenticated client",
+           isinstance(client, FakeYTMusic) and client.auth is None)
+
+
+def broken_client():
+    raise RuntimeError("no client")
+
+
+real_get_client = main.get_client
+main.get_client = broken_client
+try:
+    r = main.lyrics("dQw4w9WgXcQ")
+finally:
+    main.get_client = real_get_client
+check("a client that cannot be built is no lyrics, not a 500", r["hasLyrics"], False)
 
 print()
 if FAILURES:

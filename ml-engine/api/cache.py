@@ -26,7 +26,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,11 @@ class MeaningCache:
 
         if self.enabled:
             try:
-                self.client = create_client(supabase_url, supabase_key)
+                # The cache is optional: a short timeout keeps a stalled query
+                # from outlasting the gateway's 60s (supabase-py defaults to 120s).
+                self.client = create_client(
+                    supabase_url, supabase_key, options=ClientOptions(postgrest_client_timeout=5)
+                )
                 logger.info("Supabase cache initialized")
             except Exception as e:
                 logger.warning("Supabase initialization failed, caching disabled: %s", e)
@@ -64,14 +68,19 @@ class MeaningCache:
             logger.info("Supabase credentials not provided, caching disabled")
 
     @staticmethod
-    def _hash_couplet(couplet: str, language: str) -> str:
-        """Stable key for a couplet.
+    def _hash_couplet(couplet: str, language: str, poet: str | None = None) -> str:
+        """Stable key for a couplet, as asked about a given poet.
 
         Whitespace is collapsed so that "dil-e-nadaan  tujhe" and
         "dil-e-nadaan tujhe" share a row instead of paying for two LLM calls.
+        The poet goes into the prompt, so it is part of the key; without it the
+        first caller's poet decided the reading everyone got. With no poet the
+        key is exactly the old one, so existing rows stay valid.
         """
         normalized = " ".join(couplet.strip().lower().split())
-        return hashlib.sha256(f"{normalized}|{language}".encode("utf-8")).hexdigest()[:32]
+        normalized_poet = " ".join((poet or "").strip().lower().split())
+        key = f"{normalized}|{language}|{normalized_poet}" if normalized_poet else f"{normalized}|{language}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
 
     def verify(self) -> bool:
         """Prove the table is actually readable. Used by /health."""
@@ -88,12 +97,18 @@ class MeaningCache:
             logger.warning("cache verify failed: %s", e)
         return bool(self.reachable)
 
-    def get(self, couplet: str, language: str, depth: str = CACHE_DEPTH) -> dict | None:
+    def get(
+        self,
+        couplet: str,
+        language: str,
+        depth: str = CACHE_DEPTH,
+        poet: str | None = None,
+    ) -> dict | None:
         """Return the cached meaning, or None on miss/expiry/error."""
         if not self.enabled:
             return None
 
-        couplet_hash = self._hash_couplet(couplet, language)
+        couplet_hash = self._hash_couplet(couplet, language, poet)
 
         try:
             response = (
@@ -150,13 +165,13 @@ class MeaningCache:
         """Store a generated meaning. Only ever called with a real result.
 
         Callers must never pass a degraded/error payload here: rows are keyed
-        only by couplet+language and would otherwise mask the real meaning for
-        as long as they live.
+        only by couplet, language and poet, and would otherwise mask the real
+        meaning for as long as they live.
         """
         if not self.enabled:
             return False
 
-        couplet_hash = self._hash_couplet(couplet, language)
+        couplet_hash = self._hash_couplet(couplet, language, poet)
         expires = datetime.now(timezone.utc) + timedelta(seconds=DEFAULT_TTL_SECONDS)
 
         try:

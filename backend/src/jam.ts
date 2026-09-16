@@ -132,7 +132,13 @@ export function attachJam(server: Server, path = '/ws/mehfil') {
       socket.destroy()
       return
     }
-    if (url.pathname !== path) return // let other upgrade handlers have it
+    if (url.pathname !== path) {
+      // This is the only 'upgrade' listener, so nothing else will answer:
+      // returning silently left the socket open until the client gave up.
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
 
     const token = (url.searchParams.get('token') || '').toLowerCase()
     const room = rooms.get(token)

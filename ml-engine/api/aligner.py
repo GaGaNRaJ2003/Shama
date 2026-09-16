@@ -23,6 +23,7 @@ Two details make it work where the obvious approach fails:
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -85,10 +86,23 @@ class Occurrence:
     text: str
 
 
+class AlignmentBudgetExceeded(RuntimeError):
+    """Matching ran past the caller's deadline."""
+
+
+def _check_deadline(deadline: float | None) -> None:
+    # SequenceMatcher is super-quadratic on low-entropy text ("abab..."), so
+    # what a request costs cannot be read off its lengths alone. A deadline
+    # (a time.monotonic() value) is what finally bounds the work.
+    if deadline is not None and time.monotonic() > deadline:
+        raise AlignmentBudgetExceeded("alignment deadline passed")
+
+
 def map_occurrences(
     couplet_variants: list[list[str]],
     lines: list[dict],
     min_confidence: float = 0.5,
+    deadline: float | None = None,
 ) -> list[Occurrence]:
     """Label every timed line with the couplet it belongs to.
 
@@ -101,6 +115,8 @@ def map_occurrences(
     couplet it is, whenever it is sung. Lines we hold no couplet for are still
     returned (with `couplet=None`), because the listener is hearing them and
     the words are worth showing.
+
+    Past `deadline` (a time.monotonic() value) it raises AlignmentBudgetExceeded.
     """
     variants = [[normalize(v) for v in group if v and v.strip()] for group in couplet_variants]
 
@@ -115,6 +131,7 @@ def map_occurrences(
 
         best_idx, best_score = None, 0.0
         for i, group in enumerate(variants):
+            _check_deadline(deadline)
             score = max((similarity(v, norm_line) for v in group), default=0.0)
             if score > best_score:
                 best_idx, best_score = i, score
@@ -136,6 +153,7 @@ def align_couplets(
     couplet_variants: list[list[str]],
     lines: list[dict],
     min_confidence: float = 0.5,
+    deadline: float | None = None,
 ) -> list[Alignment]:
     """Assign a start time to each couplet.
 
@@ -143,6 +161,7 @@ def align_couplets(
         couplet_variants: per couplet, its text in every script we hold.
         lines: [{"time_ms": int, "text": str}], ascending by time.
         min_confidence: below this a couplet is left unaligned rather than guessed.
+        deadline: a time.monotonic() value; past it, AlignmentBudgetExceeded.
 
     Returns one Alignment per couplet, in order, with strictly increasing times
     for those that matched.
@@ -154,12 +173,21 @@ def align_couplets(
     if n == 0 or m == 0:
         return [Alignment(i, None, 0.0) for i in range(n)]
 
-    def score(i: int, j: int) -> float:
-        return max((similarity(v, timed[j][1]) for v in variants[i]), default=0.0)
+    def best_of(i: int, text: str) -> float:
+        _check_deadline(deadline)
+        return max((similarity(v, text) for v in variants[i]), default=0.0)
+
+    # A couplet against one line, and against two adjacent lines joined: LRC
+    # files often split a misra across two stamps.
+    single = [[best_of(i, timed[j][1]) for j in range(m)] for i in range(n)]
+    joined = [f"{timed[j][1]} {timed[j + 1][1]}".strip() for j in range(m - 1)]
+    pair = [[best_of(i, joined[j]) for j in range(m - 1)] for i in range(n)]
 
     # dp[i][j] = best total score aligning the first i couplets within the
     # first j lines. Couplets may only ever move forward through the lines,
-    # which is what stops a repeated refrain from scrambling the order.
+    # which is what stops a repeated refrain from scrambling the order. A
+    # couplet can also be dropped without using up a line: singers leave shers
+    # out, and a forced match would steal a line that belongs to another sher.
     NEG = float("-inf")
     dp = [[NEG] * (m + 1) for _ in range(n + 1)]
     back = [[None] * (m + 1) for _ in range(n + 1)]
@@ -167,36 +195,52 @@ def align_couplets(
         dp[0][j] = 0.0
 
     for i in range(1, n + 1):
+        dp[i][0] = dp[i - 1][0]
+        back[i][0] = "drop"
         for j in range(1, m + 1):
-            if dp[i][j - 1] > dp[i][j]:  # skip this line
-                dp[i][j] = dp[i][j - 1]
-                back[i][j] = "skip"
-            cand = dp[i - 1][j - 1] + score(i - 1, j - 1)
-            if cand > dp[i][j]:
-                dp[i][j] = cand
-                back[i][j] = "match"
+            # Each later option wins only when strictly greater, so ties keep
+            # the earliest occurrence of a repeated line.
+            best, how = dp[i - 1][j], "drop"  # leave couplet i-1 untimed
+            if dp[i][j - 1] > best:  # skip line j-1
+                best, how = dp[i][j - 1], "skip"
+            # Better to leave a couplet untimed than to point the listener at
+            # the wrong line, so a match has to clear min_confidence.
+            s = single[i - 1][j - 1]
+            if s >= min_confidence and dp[i - 1][j - 1] + s > best:
+                best, how = dp[i - 1][j - 1] + s, "match"
+            if j >= 2:  # couplet i-1 sung across lines j-2 and j-1
+                p2 = pair[i - 1][j - 2]
+                if (p2 >= min_confidence and p2 > single[i - 1][j - 2]
+                        and dp[i - 1][j - 2] + p2 > best):
+                    best, how = dp[i - 1][j - 2] + p2, "pair"
+            dp[i][j] = best
+            back[i][j] = how
 
-    matched: dict[int, int] = {}
+    matched: dict[int, tuple[int, float]] = {}
     i, j = n, m
-    while i > 0 and j > 0:
-        if back[i][j] == "match":
-            matched[i - 1] = j - 1
+    while i > 0:
+        how = back[i][j]
+        if how == "match":
+            matched[i - 1] = (j - 1, single[i - 1][j - 1])
             i -= 1
             j -= 1
-        else:
+        elif how == "pair":
+            # A split couplet starts where its first half is sung.
+            matched[i - 1] = (j - 2, pair[i - 1][j - 2])
+            i -= 1
+            j -= 2
+        elif how == "skip":
             j -= 1
+        else:  # drop
+            i -= 1
 
     out: list[Alignment] = []
     for idx in range(n):
-        j = matched.get(idx)
-        if j is None:
+        hit = matched.get(idx)
+        if hit is None:
+            # Untimed: the UI degrades to tap-to-jump for that couplet.
             out.append(Alignment(idx, None, 0.0))
-            continue
-        conf = score(idx, j)
-        if conf < min_confidence:
-            # Better to leave a couplet untimed than to point the listener at
-            # the wrong line — the UI degrades to tap-to-jump for that couplet.
-            out.append(Alignment(idx, None, round(conf, 3)))
         else:
+            j, conf = hit
             out.append(Alignment(idx, round(timed[j][0], 2), round(conf, 3)))
     return out

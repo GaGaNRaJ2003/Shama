@@ -60,6 +60,10 @@ def generate_narration(text: str, voice: str = "male", language: str = "en") -> 
     """
     Generate TTS audio (MP3) synchronously.
 
+    Must be called off the event loop: asyncio.run() refuses to start inside a
+    running one. Its only caller, tts/audio_cache.py, is reached from
+    tts/router.py through run_in_threadpool, so it always runs in a worker thread.
+
     Args:
         text: Text to narrate.
         voice: 'male' or 'female'
@@ -67,21 +71,14 @@ def generate_narration(text: str, voice: str = "male", language: str = "en") -> 
 
     Returns:
         MP3 audio bytes.
+
+    Raises:
+        TimeoutError: edge-tts did not finish within 30s.
     """
     voice_name = resolve_voice(voice, language)
     logger.info("Generating Edge TTS: %d chars, voice=%s, lang=%s", len(text), voice_name, language)
 
-    # Run async edge-tts in a sync context
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're inside an async context (FastAPI), use a new thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, _generate_audio_async(text, voice_name))
-                return future.result(timeout=30)
-        else:
-            return loop.run_until_complete(_generate_audio_async(text, voice_name))
-    except RuntimeError:
-        # No event loop exists
-        return asyncio.run(_generate_audio_async(text, voice_name))
+    # A fresh loop in this worker thread, with a deadline that is enforced. The
+    # old nested ThreadPoolExecutor's with-exit waited for its worker, so its
+    # timeout=30 never fired.
+    return asyncio.run(asyncio.wait_for(_generate_audio_async(text, voice_name), timeout=30))

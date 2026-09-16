@@ -19,6 +19,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .audio_cache import get_or_generate_audio
 
@@ -79,15 +80,19 @@ async def text_to_speech(request: Request, body: TTSRequest):
     Generate TTS audio using Microsoft Edge neural voices.
     Free, unlimited, no API key required.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    # Behind the gateway every call arrives from loopback, which made this one
+    # bucket shared by every listener. Only a loopback peer is trusted to name
+    # the real client; anyone else could simply write the header themselves.
+    client_ip = peer
+    if peer in ("127.0.0.1", "::1"):
+        client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or peer
     _check_rate_limit(client_ip)
 
     try:
-        result = get_or_generate_audio(
-            text=body.text,
-            voice=body.voice,
-            language=body.language,
-        )
+        # Off the event loop: generation blocks on Supabase and edge-tts, and
+        # every other request (health, meaning) used to wait behind it.
+        result = await run_in_threadpool(get_or_generate_audio, body.text, body.voice, body.language)
     except Exception as e:
         logger.error("TTS generation failed: %s", e, exc_info=True)
         # Signal frontend to use browser TTS as last resort

@@ -92,6 +92,48 @@ check("missing couplet left untimed", got[1] is None, f"(got {got})")
 check("surrounding couplets still ordered",
       got[0] is not None and got[2] is not None and got[0] < got[2], f"(got {got})")
 
+print("\n-- Sung differently from the catalogue -----------------------------")
+
+# The fixture's couplet 3 is split across the 60.54s and 64.22s stamps; it
+# starts where its first half is sung, not at the better-scoring second half.
+check("a couplet split across two lines starts at its first half",
+      times[2] == 60.54, f"(got {times[2]})")
+
+# Work 01's roman lines. Singers leave shers out, and an LRC can hold fewer
+# lines than the catalogue: an unsung couplet must go untimed without taking a
+# line from one that was sung.
+ghalib = [
+    ["dil-e-nadaan tujhe hua kya hai"],
+    ["aakhir is dard ki dawa kya hai"],
+    ["hum hain mushtaaq aur wo bezaar"],
+    ["ya ilahi ye majra kya hai"],
+    ["main ne maana ke kuchh nahin 'Ghalib'"],
+    ["muft haath aaye to bura kya hai"],
+]
+
+
+def sung(*stamps):
+    """LRC lines singing couplet k at t seconds, for each (k, t)."""
+    return [{"time_ms": int(t * 1000), "text": ghalib[k][0]} for k, t in stamps]
+
+
+got = [a.time for a in align_couplets(ghalib, sung((0, 0), (1, 10), (3, 30), (4, 40)))]
+check("LRC holding 4 of 6 couplets times exactly those 4",
+      got == [0, 10, None, 30, 40, None], f"(got {got})")
+
+got = [a.time for a in align_couplets(ghalib[:2], sung((0, 5)))]
+check("second couplet unsung, with no line left over for it",
+      got == [5, None], f"(got {got})")
+
+got = [a.time for a in align_couplets([ghalib[0], ghalib[2], ghalib[3]], sung((0, 10), (3, 30)))]
+check("unsung middle couplet does not steal a line",
+      got == [10, None, 30], f"(got {got})")
+
+got = [a.time for a in align_couplets(
+    ghalib, sung((0, 0), (1, 10), (3, 30), (5, 40), (0, 60)))]
+check("two unsung couplets, then the matla repeated at the end",
+      got == [0, 10, None, 30, None, 40], f"(got {got})")
+
 print("\n-- Occurrence mapping (the whole performance) ----------------------")
 
 occ = map_occurrences(couplets, lines)

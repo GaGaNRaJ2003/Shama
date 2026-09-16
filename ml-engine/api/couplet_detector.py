@@ -36,6 +36,11 @@ NOISE_PATTERNS = [
 
 INLINE_TIMESTAMP = re.compile(r"^\s*[\[\(]\s*\d{1,2}:\d{2}(\.\d+)?\s*[\]\)]\s*")
 
+# A trailing "(waah waah)" / "[waah]" aside. The bracket contents may not hold
+# brackets, which keeps the match linear: the old lazy `.*?` form rescanned to
+# the end of the line from every "(" and took ~20s on one 49k-char line.
+_TRAILING_WAAH = re.compile(r"\s*[\(\[][^()\[\]]*waah[^()\[\]]*[\)\]]\s*$", re.I)
+
 # Filler words that aren't meaningful lyrics
 FILLER_PATTERN = re.compile(
     r"^(aa+|oh+|hmm+|ha+|la+ la+|na na+|ooh+|ahh*|hey+|wah+|waah+)\s*[,.]?\s*$",
@@ -64,11 +69,12 @@ class DetectedCouplet:
 
 def clean_line(line: str) -> str:
     """Strip timestamps, whitespace, trailing punctuation."""
-    line = line.strip()
+    # No misra runs to 500 characters; the cap bounds every pattern run below.
+    line = line.strip()[:500]
     line = INLINE_TIMESTAMP.sub("", line).strip()
     line = line.strip("-–—").strip()
     # Remove trailing filler like ", aa" or "(waah waah)"
-    line = re.sub(r"\s*[\(\[].*?waah.*?[\)\]]\s*$", "", line, flags=re.I).strip()
+    line = _TRAILING_WAAH.sub("", line).strip()
     return line
 
 

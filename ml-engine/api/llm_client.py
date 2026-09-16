@@ -57,6 +57,9 @@ DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 DEFAULT_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "gemini,groq")
 # How long to stop asking a provider that just told us it is out of quota.
 RATE_LIMIT_COOLDOWN = int(os.getenv("LLM_RATE_LIMIT_COOLDOWN", "300"))
+# Below this much time left, starting (or retrying) a provider is pointless: an
+# answer rarely comes back that fast, and the attempt only delays the next one.
+MIN_ATTEMPT_WINDOW = 5.0
 
 
 class AllProvidersFailed(RuntimeError):
@@ -80,6 +83,12 @@ def _is_rate_limited(exc: Exception) -> bool:
     return any(k in text for k in ("429", "resourceexhausted", "rate limit", "ratelimit", "quota"))
 
 
+def _is_timeout(exc: Exception) -> bool:
+    """A timed-out call, however the SDK spells it (DeadlineExceeded, APITimeoutError...)."""
+    name = type(exc).__name__.lower()
+    return isinstance(exc, TimeoutError) or "timeout" in name or "deadline" in name
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Only transient conditions deserve a retry.
 
@@ -87,6 +96,10 @@ def _is_retryable(exc: Exception) -> bool:
     seconds of blocking sleep to a request that was never going to succeed —
     which is what previously turned a dead model id into a ~10s hang.
     """
+    # A timeout is transient too, but the deadline is shared: what is left of
+    # it is better spent on the next provider than on this one again.
+    if _is_timeout(exc):
+        return False
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     if callable(status):  # some SDKs expose code() as a method
         try:
@@ -96,7 +109,19 @@ def _is_retryable(exc: Exception) -> bool:
     if isinstance(status, int):
         return status == 429 or status >= 500
     name = type(exc).__name__.lower()
-    return any(k in name for k in ("timeout", "unavailable", "deadline", "connection", "ratelimit"))
+    return any(k in name for k in ("unavailable", "connection", "ratelimit"))
+
+
+def _time_left(deadline: float | None) -> float:
+    return float("inf") if deadline is None else deadline - time.monotonic()
+
+
+def _attempt_timeout(cap: float, deadline: float | None) -> float:
+    """One attempt's timeout: the provider's own cap, cut to what the deadline leaves."""
+    left = _time_left(deadline)
+    if left <= 0:
+        raise TimeoutError("meaning deadline reached")
+    return min(cap, left)
 
 
 class LLMClient(ABC):
@@ -106,9 +131,14 @@ class LLMClient(ABC):
 
     @abstractmethod
     def generate(
-        self, system_prompt: str, user_prompt: str, retry_rate_limits: bool = True
+        self, system_prompt: str, user_prompt: str, retry_rate_limits: bool = True,
+        deadline: float | None = None,
     ) -> dict:
-        """Generate a response and return parsed JSON dict."""
+        """Generate a response and return parsed JSON dict.
+
+        `deadline` is a time.monotonic() value shared by every attempt; each
+        attempt's timeout is cut to what is left of it.
+        """
         ...
 
     def _parse_json_response(self, text: str) -> dict:
@@ -151,6 +181,7 @@ class GroqClient(LLMClient):
     name = "groq"
     MAX_RETRIES = 2
     RETRY_DELAY = 2.0
+    ATTEMPT_TIMEOUT = 25.0
 
     def __init__(self, api_key: str, model: str | None = None):
         if Groq is None:
@@ -161,14 +192,19 @@ class GroqClient(LLMClient):
         # ~28 req/min, under the 30/min free-tier ceiling.
         self._min_interval = float(os.getenv("GROQ_MIN_INTERVAL", "2.1"))
 
-    def generate(self, system_prompt: str, user_prompt: str, retry_rate_limits: bool = True) -> dict:
+    def generate(
+        self, system_prompt: str, user_prompt: str, retry_rate_limits: bool = True,
+        deadline: float | None = None,
+    ) -> dict:
         elapsed = time.time() - self._last_request_time
         if elapsed < self._min_interval:
-            time.sleep(self._min_interval - elapsed)
+            # The pacing sleep spends the same deadline as the request does.
+            time.sleep(max(0.0, min(self._min_interval - elapsed, _time_left(deadline))))
 
         last: Exception | None = None
         for attempt in range(self.MAX_RETRIES + 1):
             try:
+                timeout = _attempt_timeout(self.ATTEMPT_TIMEOUT, deadline)
                 self._last_request_time = time.time()
                 response = self.client.chat.completions.create(
                     model=self.model_id,
@@ -179,6 +215,7 @@ class GroqClient(LLMClient):
                     temperature=0.7,
                     max_tokens=int(os.getenv("LLM_MAX_TOKENS", "3072")),
                     response_format={"type": "json_object"},
+                    timeout=timeout,
                 )
                 logger.info("groq: response received (attempt %d)", attempt + 1)
                 return self._parse_json_response(response.choices[0].message.content)
@@ -190,8 +227,11 @@ class GroqClient(LLMClient):
                 logger.warning("groq: attempt %d failed: %s", attempt + 1, e)
                 if _is_rate_limited(e) and not retry_rate_limits:
                     raise
-                if attempt < self.MAX_RETRIES and _is_retryable(e):
-                    time.sleep(self.RETRY_DELAY * (attempt + 1))
+                delay = self.RETRY_DELAY * (attempt + 1)
+                # Neither sleep nor retry unless a whole attempt still fits.
+                if (attempt < self.MAX_RETRIES and _is_retryable(e)
+                        and _time_left(deadline) - delay >= MIN_ATTEMPT_WINDOW):
+                    time.sleep(delay)
                     continue
                 raise
         raise last or RuntimeError("groq: exhausted retries")
@@ -203,6 +243,7 @@ class GeminiClient(LLMClient):
     name = "gemini"
     MAX_RETRIES = 2
     RETRY_DELAY = 1.5
+    ATTEMPT_TIMEOUT = 25.0
 
     def __init__(self, api_key: str, model: str | None = None):
         if genai is None:
@@ -218,14 +259,18 @@ class GeminiClient(LLMClient):
             ),
         )
 
-    def generate(self, system_prompt: str, user_prompt: str, retry_rate_limits: bool = True) -> dict:
+    def generate(
+        self, system_prompt: str, user_prompt: str, retry_rate_limits: bool = True,
+        deadline: float | None = None,
+    ) -> dict:
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
         last: Exception | None = None
         for attempt in range(self.MAX_RETRIES + 1):
             try:
                 response = self.model.generate_content(
-                    full_prompt, request_options={"timeout": 25}
+                    full_prompt,
+                    request_options={"timeout": _attempt_timeout(self.ATTEMPT_TIMEOUT, deadline)},
                 )
                 logger.info("gemini: response received (attempt %d)", attempt + 1)
                 return self._parse_json_response(response.text)
@@ -240,9 +285,12 @@ class GeminiClient(LLMClient):
                 if _is_rate_limited(e) and not retry_rate_limits:
                     raise
                 # Previously this retried *everything*, so a permanent 404 cost
-                # ~4.5s of blocking sleep on every single request.
-                if attempt < self.MAX_RETRIES and _is_retryable(e):
-                    time.sleep(self.RETRY_DELAY * (attempt + 1))
+                # ~4.5s of blocking sleep on every single request. Neither sleep
+                # nor retry unless a whole attempt still fits in the deadline.
+                delay = self.RETRY_DELAY * (attempt + 1)
+                if (attempt < self.MAX_RETRIES and _is_retryable(e)
+                        and _time_left(deadline) - delay >= MIN_ATTEMPT_WINDOW):
+                    time.sleep(delay)
                     continue
                 raise
         raise last or RuntimeError("gemini: exhausted retries")
@@ -300,7 +348,7 @@ class LLMRouter:
                 out[name] = f"rate limited, retrying in {int(until - now)}s"
         return out
 
-    def generate(self, system_prompt: str, user_prompt: str) -> dict:
+    def generate(self, system_prompt: str, user_prompt: str, budget_s: float = 45.0) -> dict:
         """Return parsed JSON, or raise `AllProvidersFailed`.
 
         This deliberately never returns an error-shaped payload. The caller
@@ -309,6 +357,10 @@ class LLMRouter:
         """
         errors: list[str] = []
         now = time.time()
+        # One deadline for every provider and retry, inside the gateway's 60s:
+        # otherwise a hanging provider could spend it all (~79.5s of Gemini
+        # attempts) before the next one was even tried.
+        deadline = time.monotonic() + budget_s
 
         # Skip providers we know are out of quota. Without this, an exhausted
         # free tier costs ~5s of retries on EVERY request before failing over
@@ -324,9 +376,15 @@ class LLMRouter:
 
         for i, client in enumerate(available):
             is_last = i == len(available) - 1
+            if _time_left(deadline) < MIN_ATTEMPT_WINDOW:
+                logger.warning("%s skipped: the meaning deadline is nearly spent", client.name)
+                errors.append(f"{client.name}: skipped, deadline")
+                continue
             try:
                 # Only worth waiting out a rate limit if nobody else can serve.
-                result = client.generate(system_prompt, user_prompt, retry_rate_limits=is_last)
+                result = client.generate(
+                    system_prompt, user_prompt, retry_rate_limits=is_last, deadline=deadline
+                )
                 # Recorded so the cache row can say what produced it.
                 self.last_provider = client.name
                 self.last_model = client.model_id
