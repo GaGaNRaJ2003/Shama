@@ -132,7 +132,7 @@ export function SherSheet({
       {timingState === 'none' && !hasTimestamps && (
         <p className="sync-note">
           This recording doesn&rsquo;t have timed lyrics, so the couplets can&rsquo;t follow along.
-          Tap any couplet to jump the audio there.
+          Tap any couplet to read what it means.
         </p>
       )}
 

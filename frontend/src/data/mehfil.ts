@@ -2,7 +2,10 @@
 // Tonight's Mehfil — the listening queue for the current session.
 //
 // User-facing name only: this is the same "queue" concept the rest of the app
-// already works with, persisted locally. No backend contract is involved.
+// already works with. No backend contract is involved.
+//
+// It lasts one visit: every visit starts with an empty mehfil. It is kept in
+// sessionStorage, so a reload in the same tab keeps it and a new visit doesn't.
 // -----------------------------------------------------------------------------
 
 export interface MehfilItem {
@@ -26,7 +29,13 @@ function makeId(): string {
 
 export function readMehfil(): MehfilItem[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    // Earlier versions kept the mehfil in localStorage, across visits.
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    /* storage unavailable */
+  }
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed : []
@@ -37,7 +46,7 @@ export function readMehfil(): MehfilItem[] {
 
 export function writeMehfil(items: MehfilItem[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items))
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items))
   } catch {
     /* storage full or unavailable */
   }

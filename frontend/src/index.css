@@ -25,7 +25,7 @@
   --color-text-primary: #f3ece2;
   --color-text-secondary: rgba(243, 236, 226, 0.74);
   --color-text-muted: #a3948a;
-  --color-text-faint: rgba(163, 148, 138, 0.55);
+  --color-text-faint: rgba(163, 148, 138, 0.85);
 
   /* ---- Candlelight & bronze (the retained SHAMA identity) ---- */
   --color-accent: #d98a5b;
@@ -99,9 +99,16 @@ h1, h2, h3, h4 {
 
 /* Visible, warm focus ring everywhere (§23) */
 :focus-visible {
-  outline: 1px solid var(--color-highlight);
+  outline: 2px solid var(--color-highlight);
   outline-offset: 3px;
   border-radius: var(--radius);
+}
+
+/* Black while the room loads: a first visit opens on a dark room. */
+.boot-veil {
+  position: fixed;
+  inset: 0;
+  background: #000;
 }
 
 /* Screen-reader-only label */

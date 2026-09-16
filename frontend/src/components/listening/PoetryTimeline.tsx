@@ -17,6 +17,8 @@ interface PoetryTimelineProps {
   formatTime: (seconds: number) => string
   /** Label for the section the singer is in, when timing data makes it knowable. */
   sectionLabel?: string | null
+  /** Shows progress but won't seek: a jam guest follows the host. */
+  readOnly?: boolean
 }
 
 /**
@@ -31,10 +33,11 @@ export function PoetryTimeline({
   onSeek,
   formatTime,
   sectionLabel,
+  readOnly,
 }: PoetryTimelineProps) {
   const trackRef = useRef<HTMLDivElement | null>(null)
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0
-  const seekable = duration > 0
+  const seekable = duration > 0 && !readOnly
 
   const seekFromClientX = (clientX: number) => {
     const el = trackRef.current

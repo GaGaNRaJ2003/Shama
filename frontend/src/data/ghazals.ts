@@ -604,7 +604,7 @@ export const catalog: WorkData[] = [
       },
       {
         id: 'L06-3',
-        urdu: 'ڈرے کیا موت سے جو شکل میں موت آئے',
+        urdu: 'ڈرے کیا موت سے جو شکلِ موت آئے',
         hindi: 'डरे क्या मौत से जो शक्ल-ए-मौत आए',
         roman: 'dare kya maut se jo shakl-e-maut aaye',
         englishText: 'Why fear death when death itself appears before me?',
@@ -638,7 +638,7 @@ export const catalog: WorkData[] = [
         id: 'L06-5',
         urdu: 'بہت بے آبرو ہو کر تیرے کوچے سے ہم نکلے',
         hindi: 'बहुत बे-आबरू हो कर तेरे कूचे से हम निकले',
-        roman: 'bahut be-aabru ho kar tere kooче se hum nikle',
+        roman: 'bahut be-aabru ho kar tere kooche se hum nikle',
         englishText: 'We left your lane utterly disgraced',
         transliteration: 'Bahut be-ābrū ho kar tere kūche se ham nikle',
         translation: 'We emerged from your street utterly stripped of honour.',
@@ -729,7 +729,7 @@ export const catalog: WorkData[] = [
       },
       {
         id: 'L07-5',
-        urdu: 'دل سے ترے نشانِ گم گئے جسے',
+        urdu: 'دل سے ترے نشانِ غم گئے جسے',
         hindi: 'दिल से तेरे निशान-ए-ग़म गए जिसे',
         roman: 'dil se tere nishan-e-gam gaye jise',
         englishText: 'The one from whose heart the marks of your grief have faded',
@@ -1056,7 +1056,7 @@ export const catalog: WorkData[] = [
       },
       {
         id: 'L10-6',
-        urdu: 'مرؔ کی غزل کا کیا کہنا، تمام عمر رلا دیے',
+        urdu: 'میرؔ کی غزل کا کیا کہنا، تمام عمر رلا دیے',
         hindi: 'मीर की ग़ज़ल का क्या कहना, तमाम उम्र रुला दिए',
         roman: 'Mir ki ghazal ka kya kehna, tamaam umr rula diye',
         englishText: 'What can one say of Mir\'s ghazal — it made us weep a whole lifetime',

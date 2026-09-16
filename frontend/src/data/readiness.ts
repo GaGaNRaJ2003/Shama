@@ -57,7 +57,8 @@ export function writeReadiness(workId: string, value: Readiness) {
 export function score(r: Readiness | undefined): number {
   if (!r) return 0
   const words = r.hasLyrics ? 0.2 : 0
-  const synced = r.hasSynced ? 0.25 : 0
+  // Timings from another rendition only roughly follow the singer.
+  const synced = r.hasSynced ? (r.timingReliable ? 0.25 : 0.1) : 0
   const reliable = r.hasSynced && r.timingReliable ? 0.1 : 0
   const covered = 0.3 * Math.min(1, r.coverage)
   // Beyond about eight couplets the marginal value flattens out.
@@ -70,6 +71,7 @@ export function describe(r: Readiness | undefined): string {
   if (!r) return 'not checked yet'
   if (!r.hasLyrics) return 'no words found'
   if (!r.hasSynced) return 'words, not timed'
+  if (!r.timingReliable) return 'words, timings approximate'
   if (r.coverage >= 0.6) return 'follows along, with meanings'
   if (r.coverage > 0) return 'follows along, some meanings'
   return 'follows along'

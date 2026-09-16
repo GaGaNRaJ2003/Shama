@@ -36,6 +36,8 @@ export interface JamHandle {
   token: string | null
   listeners: number
   connected: boolean
+  /** Guest-only: false while the room has no host connected. */
+  hostPresent: boolean
   /** Guest-only: the state we should be matching right now. */
   remote: JamState | null
   start: () => Promise<string | null>
@@ -49,6 +51,9 @@ export interface JamHandle {
   acknowledgeGesture: () => void
   /** Where the host is right now, in ms, corrected for clock skew. */
   expectedPositionMs: () => number | null
+  /** Said once we are out of a mehfil, e.g. that its link has expired. */
+  notice: string | null
+  dismissNotice: () => void
 }
 
 export function useMehfilJam(apiBase: string): JamHandle {
@@ -58,6 +63,8 @@ export function useMehfilJam(apiBase: string): JamHandle {
   const [connected, setConnected] = useState(false)
   const [remote, setRemote] = useState<JamState | null>(null)
   const [needsGesture, setNeedsGesture] = useState(false)
+  const [hostPresent, setHostPresent] = useState(true)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const hostKeyRef = useRef<string | null>(null)
@@ -68,6 +75,21 @@ export function useMehfilJam(apiBase: string): JamHandle {
   // Mirrors `remote` so the position getter always sees the newest state
   // without needing to be re-created on every message.
   const remoteRef = useRef<JamState | null>(null)
+  // A browser keeps its permission to play sound for the rest of the page, so
+  // a guest is asked to tap once, not again after every reconnect.
+  const gestureAckedRef = useRef(false)
+  // Socket callbacks outlive the render that made them, so they read these.
+  const tokenRef = useRef<string | null>(null)
+  const roleRef = useRef<JamRole>(null)
+  tokenRef.current = token
+  roleRef.current = role
+  // Set while leaving or unmounting, so a socket we closed on purpose isn't
+  // taken for one that dropped.
+  const leavingRef = useRef(false)
+  const attemptRef = useRef(0)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The close handler is made before `reconnect` exists, so it calls it here.
+  const reconnectRef = useRef<() => void>(() => {})
 
   const wsUrl = useCallback(
     (tok: string, hostKey?: string | null) => {
@@ -79,6 +101,14 @@ export function useMehfilJam(apiBase: string): JamHandle {
     [apiBase]
   )
 
+  // Back off 1s, 2s, 4s… up to 15s, so a server that is down isn't hammered.
+  const scheduleReconnect = useCallback(() => {
+    retryTimerRef.current = setTimeout(
+      () => reconnectRef.current(),
+      Math.min(15000, 1000 * 2 ** attemptRef.current++)
+    )
+  }, [])
+
   const connect = useCallback(
     (tok: string, asHost: boolean) => {
       wsRef.current?.close()
@@ -87,8 +117,12 @@ export function useMehfilJam(apiBase: string): JamHandle {
 
       socket.onopen = () => setConnected(true)
       socket.onclose = () => {
+        // Only the socket still in use counts: one we replaced, or closed on
+        // purpose, must not bring us back.
+        const wasActive = wsRef.current === socket
         setConnected(false)
-        if (wsRef.current === socket) wsRef.current = null
+        if (wasActive) wsRef.current = null
+        if (wasActive && tokenRef.current && !leavingRef.current) scheduleReconnect()
       }
       socket.onerror = () => setConnected(false)
       socket.onmessage = (event) => {
@@ -102,6 +136,7 @@ export function useMehfilJam(apiBase: string): JamHandle {
           clockSkewRef.current = msg.serverNow - Date.now()
         }
         if (msg.type === 'welcome') {
+          attemptRef.current = 0
           setRole(msg.role)
           setToken(msg.token)
           setListeners(msg.listeners || 1)
@@ -110,25 +145,47 @@ export function useMehfilJam(apiBase: string): JamHandle {
             setRemote(msg.state)
             // Browsers refuse to start audio without an interaction, so a guest
             // must click once. Surfacing that beats silently not playing.
-            setNeedsGesture(true)
+            if (!gestureAckedRef.current) setNeedsGesture(true)
           }
         } else if (msg.type === 'state') {
           remoteRef.current = msg.state
           setRemote(msg.state)
         } else if (msg.type === 'presence') {
           setListeners(msg.listeners || 0)
+          if (typeof msg.hasHost === 'boolean') setHostPresent(msg.hasHost)
         }
       }
     },
-    [wsUrl]
+    [wsUrl, scheduleReconnect]
+  )
+
+  // Browsers hide the 404 that refuses a socket to a room that is gone, so
+  // this is how we find out. true = alive, false = ended, null = can't tell.
+  const roomExists = useCallback(
+    async (tok: string): Promise<boolean | null> => {
+      try {
+        const res = await fetch(`${apiBase}/api/mehfil/${encodeURIComponent(tok)}`)
+        if (res.status === 404) return false
+        return res.ok ? true : null
+      } catch {
+        return null
+      }
+    },
+    [apiBase]
   )
 
   const start = useCallback(async (): Promise<string | null> => {
+    leavingRef.current = false
+    setNotice(null)
     try {
       const res = await fetch(`${apiBase}/api/mehfil`, { method: 'POST' })
       if (!res.ok) throw new Error(String(res.status))
       const { token: tok, hostKey } = await res.json()
       hostKeyRef.current = hostKey
+      // Now rather than on the next render: a socket that fails at once must
+      // still know which mehfil to retry.
+      tokenRef.current = tok
+      roleRef.current = 'host'
       setRole('host')
       setToken(tok)
       connect(tok, true)
@@ -139,17 +196,11 @@ export function useMehfilJam(apiBase: string): JamHandle {
     }
   }, [apiBase, connect])
 
-  const join = useCallback(
-    (tok: string) => {
-      hostKeyRef.current = null
-      setRole('guest')
-      setToken(tok)
-      connect(tok, false)
-    },
-    [connect]
-  )
-
   const leave = useCallback(() => {
+    leavingRef.current = true
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+    retryTimerRef.current = null
+    attemptRef.current = 0
     wsRef.current?.close()
     wsRef.current = null
     hostKeyRef.current = null
@@ -160,7 +211,38 @@ export function useMehfilJam(apiBase: string): JamHandle {
     setListeners(0)
     setConnected(false)
     setNeedsGesture(false)
+    setHostPresent(true)
+    setNotice(null)
   }, [])
+
+  // The room is gone: reaped after everyone left, or lost to a server restart.
+  // Stop trying, drop the dead link from the address bar, and say so.
+  const endMehfil = useCallback(() => {
+    leave()
+    const url = new URL(window.location.href)
+    url.searchParams.delete('mehfil')
+    window.history.replaceState(null, '', url.toString())
+    setNotice('That mehfil has ended.')
+  }, [leave])
+
+  const join = useCallback(
+    async (tok: string) => {
+      leavingRef.current = false
+      // Ask first: a link to a mehfil that has ended should say so, rather
+      // than leave a guest of nothing "reconnecting" forever.
+      const alive = await roomExists(tok)
+      if (alive === false) return endMehfil()
+      // Left, or unmounted, while we were asking.
+      if (leavingRef.current) return
+      hostKeyRef.current = null
+      tokenRef.current = tok
+      roleRef.current = 'guest'
+      setRole('guest')
+      setToken(tok)
+      connect(tok, false)
+    },
+    [connect, roomExists, endMehfil]
+  )
 
   const publish = useCallback((state: Omit<JamState, 'updatedAt'>) => {
     const socket = wsRef.current
@@ -169,22 +251,37 @@ export function useMehfilJam(apiBase: string): JamHandle {
     lastSentRef.current = Date.now()
   }, [])
 
-  // Reconnect once if the socket drops while we are still in a mehfil.
-  useEffect(() => {
-    if (!token || connected) return
-    const t = setTimeout(() => {
-      if (!wsRef.current && token) connect(token, role === 'host')
-    }, 2500)
-    return () => clearTimeout(t)
-  }, [token, connected, role, connect])
+  // After a drop: rejoin if the room is still there, end it if it isn't, and
+  // try again later if the server can't say.
+  const reconnect = useCallback(async () => {
+    const tok = tokenRef.current
+    if (!tok || leavingRef.current) return
+    const alive = await roomExists(tok)
+    // Left, or moved on to another mehfil, while we were asking.
+    if (leavingRef.current || tokenRef.current !== tok) return
+    if (alive === false) return endMehfil()
+    if (alive === null) return scheduleReconnect()
+    connect(tok, roleRef.current === 'host')
+  }, [roomExists, endMehfil, scheduleReconnect, connect])
+  reconnectRef.current = reconnect
 
-  useEffect(() => () => wsRef.current?.close(), [])
+  useEffect(() => {
+    leavingRef.current = false
+    return () => {
+      // Unmounting (or StrictMode rehearsing it) is not a dropped socket, so
+      // the close below must not schedule a reconnect.
+      leavingRef.current = true
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      wsRef.current?.close()
+    }
+  }, [])
 
   return {
     role,
     token,
     listeners,
     connected,
+    hostPresent,
     remote,
     start,
     join,
@@ -195,7 +292,10 @@ export function useMehfilJam(apiBase: string): JamHandle {
         ? `${window.location.origin}${window.location.pathname}?mehfil=${token}`
         : null,
     needsGesture,
-    acknowledgeGesture: () => setNeedsGesture(false),
+    acknowledgeGesture: () => {
+      gestureAckedRef.current = true
+      setNeedsGesture(false)
+    },
     expectedPositionMs: () => {
       const state = remoteRef.current
       if (!state) return null
@@ -204,6 +304,8 @@ export function useMehfilJam(apiBase: string): JamHandle {
       const nowOnServerClock = Date.now() + clockSkewRef.current
       return state.positionMs + Math.max(0, nowOnServerClock - state.updatedAt)
     },
+    notice,
+    dismissNotice: () => setNotice(null),
   }
 }
 

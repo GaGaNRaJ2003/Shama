@@ -15,6 +15,9 @@ interface MehfilJamBarProps {
 export function MehfilJamBar({ jam }: MehfilJamBarProps) {
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [startFailed, setStartFailed] = useState(false)
+  // The link the clipboard refused, put on screen so it can be copied by hand.
+  const [shownLink, setShownLink] = useState<string | null>(null)
 
   const copyLink = async () => {
     if (!jam.shareUrl) return
@@ -23,25 +26,49 @@ export function MehfilJamBar({ jam }: MehfilJamBarProps) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2200)
     } catch {
-      /* clipboard blocked — the link is on screen to copy by hand */
+      /* clipboard blocked — show the link so it can be copied by hand */
+      setShownLink(jam.shareUrl)
     }
   }
 
   if (!jam.role) {
     return (
-      <button
-        type="button"
-        className="text-btn"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true)
-          await jam.start()
-          setBusy(false)
-        }}
-        title="Listen together — share a link, no account needed"
-      >
-        {busy ? 'Opening…' : 'Listen together'}
-      </button>
+      <>
+        {jam.notice && (
+          <span className="jam-status jam-dim">
+            <span role="status">{jam.notice}</span>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={jam.dismissNotice}
+              aria-label="Dismiss this notice"
+              title="Dismiss"
+            >
+              <X size={12} aria-hidden="true" />
+            </button>
+          </span>
+        )}
+        <button
+          type="button"
+          className="text-btn"
+          disabled={busy}
+          onClick={async () => {
+            setStartFailed(false)
+            setBusy(true)
+            const tok = await jam.start()
+            setBusy(false)
+            if (!tok) setStartFailed(true)
+          }}
+          title="Listen together — share a link, no account needed"
+        >
+          {busy ? 'Opening…' : 'Listen together'}
+        </button>
+        {startFailed && (
+          <span className="eyebrow" role="status">
+            Couldn&rsquo;t open a mehfil just now. Try again in a moment.
+          </span>
+        )}
+      </>
     )
   }
 
@@ -50,7 +77,9 @@ export function MehfilJamBar({ jam }: MehfilJamBarProps) {
       <span className="jam-status">
         <Users size={13} aria-hidden="true" />
         <span>
-          {jam.listeners > 1
+          {jam.role === 'guest' && jam.connected && !jam.hostPresent
+            ? 'The host has stepped away'
+            : jam.listeners > 1
             ? `${jam.listeners} in the mehfil`
             : jam.role === 'host'
             ? 'Waiting for others'
@@ -63,6 +92,25 @@ export function MehfilJamBar({ jam }: MehfilJamBarProps) {
         <button type="button" className="text-btn" onClick={copyLink}>
           <Link2 size={12} aria-hidden="true" /> {copied ? 'Link copied' : 'Copy link'}
         </button>
+      )}
+
+      {jam.role === 'host' && jam.shareUrl && shownLink === jam.shareUrl && (
+        <input
+          type="text"
+          readOnly
+          autoFocus
+          value={jam.shareUrl}
+          aria-label="Link to this mehfil"
+          onFocus={(e) => e.currentTarget.select()}
+          size={18}
+          style={{
+            background: 'none',
+            border: 0,
+            color: 'var(--color-text-muted)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.7rem',
+          }}
+        />
       )}
 
       <button

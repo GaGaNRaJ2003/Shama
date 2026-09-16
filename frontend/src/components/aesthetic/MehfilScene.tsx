@@ -1,6 +1,7 @@
 import { Canvas, useFrame } from '@react-three/fiber'
 import { useRef, useState, useEffect, useMemo } from 'react'
 import * as THREE from 'three'
+import { ClassicalDiya, DiyaFlame, WICK_TIP, type FlameControls } from './diya'
 
 interface MehfilSceneProps {
   isPlaying?: boolean
@@ -8,67 +9,21 @@ interface MehfilSceneProps {
   onTogglePlay?: () => void
 }
 
-// The Shama itself: a clay diya, oil pooled in the well and a cotton batti
-// burning at the pinched spout.
+// The Shama itself: the painted clay diya on its brass thali (diya.tsx), its
+// flame flickering and throwing a little light. Turned so the spout and flame
+// lean toward the viewer.
+const DIYA_TURN = -0.35
+
 function Diya() {
-  const flameGroupRef = useRef<THREE.Group>(null)
-  const flameOuterRef = useRef<THREE.Mesh>(null)
-  const flameInnerRef = useRef<THREE.Mesh>(null)
-  const flameBaseRef = useRef<THREE.Mesh>(null)
+  const flame = useRef<FlameControls>(null)
   const lightRef = useRef<THREE.PointLight>(null)
-
-  // Teardrop flame profile for LatheGeometry. Memoised: a fresh array each
-  // render gave `args` a new identity and rebuilt all three lathe geometries.
-  const points = useMemo(() => {
-    const pts: THREE.Vector2[] = []
-    for (let i = 0; i < 20; i++) {
-      const t = i / 19
-      // Bottom is thickest, curving inwards to a pointed tip at top
-      const x = Math.sin(t * Math.PI) * 0.058 * (1.0 - t * 0.45)
-      const y = t * 0.2
-      pts.push(new THREE.Vector2(x, y))
-    }
-    return pts
-  }, [])
-
-  // Diya profile: out along the foot, up and outward to the rim, then back
-  // down the inner wall so the bowl is hollow and the rim reads thin.
-  const bowlPoints = useMemo(
-    () => [
-      new THREE.Vector2(0.0, 0.0),
-      new THREE.Vector2(0.055, 0.0),
-      new THREE.Vector2(0.1, 0.006),
-      new THREE.Vector2(0.135, 0.022),
-      new THREE.Vector2(0.158, 0.046),
-      new THREE.Vector2(0.168, 0.072),
-      new THREE.Vector2(0.166, 0.09),   // rim
-      new THREE.Vector2(0.15, 0.086),   // and back down the inside
-      new THREE.Vector2(0.132, 0.062),
-      new THREE.Vector2(0.108, 0.04),
-      new THREE.Vector2(0.06, 0.03),
-      new THREE.Vector2(0.0, 0.028),
-    ],
-    []
-  )
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime()
-    
-    // Organic flickering flame scale
-    const scaleFlicker = 1.0 + Math.sin(t * 22) * 0.04 + Math.cos(t * 31) * 0.02
-    const heightFlicker = 1.0 + Math.cos(t * 16) * 0.08 + Math.sin(t * 26) * 0.03
-    
-    if (flameGroupRef.current) {
-      // Gentle swaying/dancing motion in drafts
-      flameGroupRef.current.rotation.z = Math.sin(t * 6) * 0.045 + Math.cos(t * 13) * 0.02
-      flameGroupRef.current.rotation.x = Math.cos(t * 5) * 0.03
-    }
-
-    if (flameOuterRef.current) flameOuterRef.current.scale.set(scaleFlicker, heightFlicker, scaleFlicker)
-    if (flameInnerRef.current) flameInnerRef.current.scale.set(scaleFlicker * 0.85, heightFlicker * 0.9, scaleFlicker * 0.85)
-    if (flameBaseRef.current) flameBaseRef.current.scale.set(scaleFlicker * 0.7, heightFlicker * 0.45, scaleFlicker * 0.7)
-
-    // Dynamic point light intensity flicker
+    // An organic flicker: the flame stretches, narrows and sways in the draft.
+    const flicker = Math.sin(t * 22) * 0.04 + Math.cos(t * 31) * 0.02 + Math.sin(t * 9) * 0.02
+    const lean = Math.sin(t * 6) * 0.045 + Math.cos(t * 13) * 0.02
+    flame.current?.update(0.17, 1, lean, flicker)
     if (lightRef.current) {
       lightRef.current.intensity = 2.8 + Math.sin(t * 22) * 0.25 + Math.cos(t * 42) * 0.12
     }
@@ -76,86 +31,19 @@ function Diya() {
 
   return (
     // Placement is dictated by the camera frustum: at fov 42 and z=1.7 the
-    // square viewport shows x in [-0.653, 0.653], so the old x=-0.55 put the
-    // thali's left edge at -0.82 — off screen. y is raised from the candle's
-    // -0.4 because a diya bowl is ~0.09 tall against a 0.6 candle.
-    <group position={[-0.34, 0.2, 0]}>
-      {/* Brass thali the diya rests on — a diya is a ground-resting object, and
-          the scene has no floor to rest it on. */}
-      <mesh position={[0, -0.012, 0]}>
-        <cylinderGeometry args={[0.26, 0.27, 0.016, 48]} />
-        <meshStandardMaterial color="#b2734a" metalness={0.9} roughness={0.22} />
-      </mesh>
-
-      {/* The diya: a shallow earthen bowl. Lathed from a profile that runs out
-          along the foot, up the outer wall, over the rim and back down the
-          inside, so the rim reads thin and the well holds the oil. */}
-      <mesh position={[0, 0, 0]}>
-        <latheGeometry args={[bowlPoints, 48]} />
-        <meshStandardMaterial
-          color="#a85a33"
-          roughness={0.88}
-          metalness={0}
-          emissive="#ff771a"
-          emissiveIntensity={0.16}
-          side={THREE.DoubleSide}
+    // square viewport shows x in [-0.653, 0.653]; the thali (radius 0.28) must
+    // stay inside it.
+    <group position={[-0.34, 0.2, 0]} rotation={[0, DIYA_TURN, 0]}>
+      <ClassicalDiya glow={0.08}>
+        <DiyaFlame ref={flame} />
+        <pointLight
+          ref={lightRef}
+          position={[WICK_TIP[0], WICK_TIP[1] + 0.08, WICK_TIP[2] + 0.1]}
+          intensity={2.8}
+          distance={3.5}
+          color="#ffd48a"
         />
-      </mesh>
-
-      {/* Pinched spout. A lathe is a surface of revolution and cannot express
-          an asymmetric pinch, so the spout is its own small mesh at the rim. */}
-      <mesh position={[0.148, 0.052, 0]} rotation={[0, 0, -Math.PI / 2 - 0.22]}>
-        <coneGeometry args={[0.052, 0.1, 16, 1, false, 0, Math.PI]} />
-        <meshStandardMaterial color="#a85a33" roughness={0.88} metalness={0} />
-      </mesh>
-
-      {/* Oil pooled in the well. Low roughness + a little metalness is what
-          sells "liquid" rather than "painted". */}
-      <mesh position={[0, 0.042, 0]}>
-        <cylinderGeometry args={[0.125, 0.115, 0.006, 40]} />
-        <meshStandardMaterial
-          color="#3d2410"
-          roughness={0.08}
-          metalness={0.45}
-          emissive="#ff9a3c"
-          emissiveIntensity={0.22}
-        />
-      </mesh>
-
-      {/* Cotton batti lying across the spout, soaked end forward */}
-      <mesh position={[0.115, 0.055, 0]} rotation={[0, 0, Math.PI / 2 - 0.28]}>
-        <cylinderGeometry args={[0.009, 0.007, 0.13, 10]} />
-        <meshStandardMaterial color="#d8cbb4" roughness={0.9} />
-      </mesh>
-      {/* Charred tip where the flame sits */}
-      <mesh position={[0.158, 0.072, 0]}>
-        <sphereGeometry args={[0.011, 8, 8]} />
-        <meshBasicMaterial color="#2a1c14" />
-      </mesh>
-
-      {/* Layered Realistic Flickering Flame — unchanged, reseated on the spout */}
-      <group ref={flameGroupRef} position={[0.158, 0.078, 0]}>
-        {/* Outer Orange Glowing Envelope */}
-        <mesh ref={flameOuterRef}>
-          <latheGeometry args={[points, 32]} />
-          <meshBasicMaterial color="#ff5b14" transparent opacity={0.45} depthWrite={false} blending={THREE.AdditiveBlending} />
-        </mesh>
-
-        {/* Inner Yellow-White Combustion Core */}
-        <mesh ref={flameInnerRef} position={[0, 0.01, 0]}>
-          <latheGeometry args={[points, 32]} />
-          <meshBasicMaterial color="#ffd58b" transparent opacity={0.9} />
-        </mesh>
-
-        {/* Bottom Blue Flame Base */}
-        <mesh ref={flameBaseRef} position={[0, 0.001, 0]}>
-          <latheGeometry args={[points, 32]} />
-          <meshBasicMaterial color="#3b82f6" transparent opacity={0.6} blending={THREE.AdditiveBlending} />
-        </mesh>
-      </group>
-
-      {/* Point Light originating from flame */}
-      <pointLight ref={lightRef} position={[0.158, 0.16, 0.1]} intensity={2.8} distance={3.5} color="#ffd48a" />
+      </ClassicalDiya>
     </group>
   )
 }
@@ -180,12 +68,12 @@ function Moths() {
   const wingRightRefs = useRef<THREE.Mesh[]>([]);
 
   const mothConfigs: MothState[] = useMemo(() => [
-    // World-space, orbiting the diya's flame (group y 0.2 + local 0.078 ≈ 0.28).
+    // World-space, orbiting the diya's flame (at about -0.1, 0.4, 0.09).
     // Radii are capped so the widest orbit stays inside the same frustum the
     // lamp has to fit in.
-    { x: -0.28, y: 0.32, z: 0, angle: 0, radiusX: 0.24, radiusZ: 0.2, speed: 2.2, yFreq: 1.8, yOffset: 0.2 },
-    { x: -0.28, y: 0.32, z: 0, angle: Math.PI * 0.6, radiusX: 0.26, radiusZ: 0.28, speed: -1.8, yFreq: 2.4, yOffset: 0.5 },
-    { x: -0.28, y: 0.32, z: 0, angle: Math.PI * 1.3, radiusX: 0.21, radiusZ: 0.24, speed: 2.6, yFreq: 3.2, yOffset: -0.1 },
+    { x: -0.12, y: 0.38, z: 0.08, angle: 0, radiusX: 0.24, radiusZ: 0.2, speed: 2.2, yFreq: 1.8, yOffset: 0.2 },
+    { x: -0.12, y: 0.38, z: 0.08, angle: Math.PI * 0.6, radiusX: 0.26, radiusZ: 0.28, speed: -1.8, yFreq: 2.4, yOffset: 0.5 },
+    { x: -0.12, y: 0.38, z: 0.08, angle: Math.PI * 1.3, radiusX: 0.21, radiusZ: 0.24, speed: 2.6, yFreq: 3.2, yOffset: -0.1 },
   ], []);
 
   useFrame(({ clock }) => {
@@ -200,7 +88,7 @@ function Moths() {
 
       const currentAngle = config.angle + elapsed * config.speed;
       const x = config.x + Math.cos(currentAngle) * config.radiusX;
-      const z = Math.sin(currentAngle) * config.radiusZ;
+      const z = config.z + Math.sin(currentAngle) * config.radiusZ;
       const y = config.y + Math.sin(elapsed * config.yFreq + config.yOffset) * 0.25;
 
       group.position.set(x, y, z);
@@ -258,7 +146,7 @@ function Moths() {
 // grooves plus a faint anisotropic sheen — onto a canvas we use as the disc map.
 // This is what sells "real record": as the platter turns, the directional
 // light rakes across the grooves and a highlight sweeps around the disc.
-function useVinylGrooveTexture() {
+export function useVinylGrooveTexture() {
   return useMemo(() => {
     if (typeof document === 'undefined') return null
     const size = 1024
@@ -345,21 +233,36 @@ function VinylRecord({
       setTexture(null)
       return
     }
+    // A load still in flight when the cover changes must not land over the
+    // newer one.
+    let cancelled = false
     const loader = new THREE.TextureLoader()
     loader.setCrossOrigin('anonymous')
     loader.load(
       coverUrl,
       (tex) => {
+        if (cancelled) {
+          tex.dispose()
+          return
+        }
         tex.colorSpace = THREE.SRGBColorSpace
         setTexture(tex)
       },
       undefined,
       (err) => {
         console.warn('[MehfilScene] Texture loader failed to load coverUrl:', coverUrl, err)
-        setTexture(null)
+        if (!cancelled) setTexture(null)
       }
     )
+    return () => {
+      cancelled = true
+    }
   }, [coverUrl])
+
+  // Free each label texture once it has been replaced, and the last one when
+  // the deck goes. After commit on purpose: disposed any sooner, a frame still
+  // drawing it would upload it again, and nothing would free that copy.
+  useEffect(() => () => texture?.dispose(), [texture])
 
   // 33 1/3 rpm in rad/s.
   const SPIN_SPEED = (33.333 / 60) * Math.PI * 2
@@ -422,6 +325,9 @@ function VinylRecord({
         position={[0, 0.03, 0]}
         onPointerOver={(e) => {
           e.stopPropagation()
+          // Without a handler (a jam guest follows the host) the deck isn't a
+          // control, so it shouldn't look like one.
+          if (!onTogglePlay) return
           setHovered(true)
           document.body.style.cursor = 'pointer'
         }}
@@ -457,10 +363,11 @@ function VinylRecord({
         {/* Center Label (Cover Image / Copper backup) */}
         <mesh position={[0, 0.03, 0]}>
           <cylinderGeometry args={[0.175, 0.175, 0.006, 48]} />
+          {/* Matte, like a printed paper label, with or without the cover. */}
           {texture ? (
-            <meshStandardMaterial map={texture} roughness={0.55} metalness={0.05} />
+            <meshStandardMaterial map={texture} roughness={0.95} metalness={0} />
           ) : (
-            <meshStandardMaterial color="#d98a5b" metalness={0.7} roughness={0.35} />
+            <meshStandardMaterial color="#c98a4e" metalness={0.08} roughness={0.92} />
           )}
         </mesh>
 

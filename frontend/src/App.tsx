@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { Loader2, Music, Play, Search, Trash2 } from 'lucide-react'
+import { Check, Loader2, Music, Play, Plus, Search, Trash2 } from 'lucide-react'
 import './App.css'
+import { useAmbience } from './audio/useAmbience'
+import AmbienceToggle from './components/aesthetic/AmbienceToggle'
 import { ShaderBackdrop } from './components/aesthetic/ShaderBackdrop'
+import { IntroSequence, prefersReducedMotion, shouldPlayIntro } from './components/aesthetic/IntroSequence'
 import { YouTubePlayer } from './components/YouTubePlayer'
 import ListeningStage from './components/listening/ListeningStage'
 import MehfilJamBar, { JamJoinPrompt } from './components/listening/MehfilJamBar'
@@ -44,6 +47,8 @@ const COPY = {
     'We couldn’t find a recording of this ghazal right now. You can look for it under Explore.',
   searchDown: 'We couldn’t reach the recordings just now.',
   noResults: 'Nothing came back for that. Try another poet, singer or ghazal.',
+  unplayable: 'This recording can’t be played here. Try another one under Explore.',
+  slowDown: 'That was a lot of searching at once. Give it a minute, then try again.',
 }
 
 interface YtTrack {
@@ -155,6 +160,18 @@ export function App() {
   const nowTitleRef = useRef('')
   const nowArtistRef = useRef('')
   const durationRef = useRef(0)
+  // Which video currentTime and duration were reported for. Until the new one
+  // reports, they are still the previous recording's.
+  const progressVideoRef = useRef<string | null>(null)
+  const [progressVideoId, setProgressVideoId] = useState<string | null>(null)
+  // Bumped by every new playback intent, so a slower lookup can't land late.
+  const resolveTokenRef = useRef(0)
+  const activeWorkIdRef = useRef(activeWork.id)
+  const ytVideoIdRef = useRef<string | null>(null)
+  // What a recording's lyrics were last asked with, so the player's real
+  // duration can correct a lookup made without it (once per recording).
+  const lyricsLookupRef = useRef<{ videoId: string; durationSeconds: number } | null>(null)
+  const relookupDoneRef = useRef<string | null>(null)
 
   // Recording search state
   const [ytQuery, setYtQuery] = useState<string>('')
@@ -187,6 +204,15 @@ export function App() {
   // Tonight's Mehfil — the session queue.
   const [mehfil, setMehfil] = useState<MehfilItem[]>(() => readMehfil())
   const [currentMehfilId, setCurrentMehfilId] = useState<string | null>(null)
+  // Spoken confirmation for the + on a search result (the icon change is silent).
+  const [mehfilNotice, setMehfilNotice] = useState('')
+
+  // The opening (a first visit, or replayed from the footer). `run` remounts it.
+  const [intro, setIntro] = useState<{ calm: boolean; silent: boolean; run: number } | null>(() =>
+    shouldPlayIntro() ? { calm: false, silent: false, run: 0 } : null
+  )
+  // The room appearing out of the opening's light.
+  const [emerging, setEmerging] = useState(false)
 
   // Mehfil Jam — listening together over a shared link.
   const jam = useMehfilJam(API_BASE)
@@ -195,6 +221,13 @@ export function App() {
   // `isRecording` == showing a searched recording rather than a curated ghazal.
   const isRecording = !!ytTrack
   const isStreaming = playbackSource === 'youtube'
+
+  // The room's tanpura hums while nothing else is sounding. It also holds
+  // while a guest's join prompt is saying the browser can't play sound yet.
+  // The tanpura waits for the opening to finish, then swells in.
+  const ambience = useAmbience(
+    isPlaying || isSpeaking || resolving || (isGuest && jam.needsGesture) || intro !== null
+  )
 
   // Meaning from the ML engine
   const [aiMeaning, setAiMeaning] = useState<Meaning | null>(null)
@@ -226,14 +259,17 @@ export function App() {
     { time: number; couplet: number | null; text: string }[]
   >([])
 
-  // A couplet's start time: a derived timing wins over the seeded value.
+  // A couplet's start time: a derived timing wins over the seeded value, but
+  // only for the recording it was derived from.
   const lineTime = useCallback(
     (work: WorkData, line: LineData): number | null => {
       const derived = autoTimings[work.id]?.[line.id]
-      if (typeof derived === 'number') return derived
+      const ownRecording =
+        !ytVideoId || (autoTimings as unknown as TimingStore).__keys?.[work.id] === `${work.id}:${ytVideoId}`
+      if (typeof derived === 'number' && ownRecording) return derived
       return typeof line.t === 'number' ? line.t : null
     },
-    [autoTimings]
+    [autoTimings, ytVideoId]
   )
   const workLineTime = useCallback(
     (line: LineData) => lineTime(activeWork, line),
@@ -245,6 +281,9 @@ export function App() {
   useEffect(() => {
     const subject = adhocLine || activeLine?.roman
     if (isRecording || !subject) return
+    // A slow answer for the previous couplet must never land on this one.
+    const ctrl = new AbortController()
+    let live = true
     setAiMeaning(null)
     setAiFailed(false)
     setAiLoading(true)
@@ -258,25 +297,35 @@ export function App() {
         // The sung line may be Devanagari or Urdu; the engine reads either.
         language: 'roman',
       }),
+      signal: ctrl.signal,
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
       .then((data) => {
+        if (!live) return
         const clean = sanitizeMeaning(data)
         if (clean) {
           setAiMeaning(clean)
         } else {
           // The service answered but had nothing showable. Detail stays here.
           console.warn('[shama] meaning service returned no usable content:', data)
+          setAiMeaning(null)
           setAiFailed(true)
         }
         setAiLoading(false)
       })
       .catch((err) => {
+        if (!live) return
         // Logged for us, never surfaced to the reader.
         console.warn('[shama] meaning request failed:', err)
+        setAiMeaning(null)
         setAiFailed(true)
         setAiLoading(false)
       })
+    return () => {
+      live = false
+      ctrl.abort()
+      setAiLoading(false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLine?.id, adhocLine, meaningNonce])
 
@@ -337,9 +386,11 @@ export function App() {
         artist: remote.artist || '',
         durationSeconds: remote.durationSeconds || undefined,
       })
+      resetProgress()
       setYtVideoId(remote.videoId)
       resolvedWorkRef.current = null
       setSelectedYtLine(null)
+      setAdhocLine(null)
       setYtCouplets([])
       fetchYtLyrics({
         videoId: remote.videoId,
@@ -372,16 +423,20 @@ export function App() {
   // guest who joins mid-ghazal lands in the right place.
   useEffect(() => {
     if (jam.role !== 'host') return
-    const send = () =>
+    const send = () => {
+      // Until the new video reports, the clock still belongs to the last one;
+      // guests would seek to its position and match lyrics to its duration.
+      const fresh = progressVideoRef.current === ytVideoId
       jam.publish({
         videoId: ytVideoId,
-        positionMs: Math.round(currentTimeRef.current * 1000),
+        positionMs: fresh ? Math.round(currentTimeRef.current * 1000) : 0,
         paused: !isPlaying,
         title: nowTitleRef.current,
         artist: nowArtistRef.current,
-        durationSeconds: Math.round(durationRef.current),
+        durationSeconds: fresh ? Math.round(durationRef.current) : 0,
         queue: mehfil.map((m) => ({ title: m.title, artist: m.artist })),
       })
+    }
     send()
     const id = setInterval(send, HEARTBEAT_MS)
     return () => clearInterval(id)
@@ -412,21 +467,26 @@ export function App() {
   }, [])
 
   // A curated work changed → reset the transport. Playback (re)starts on demand
-  // via handlePlayPause, which resolves a YouTube video for the work.
-  useEffect(() => {
+  // via handlePlayPause, which resolves a YouTube video for the work. The
+  // resolve token and `resolving` are left alone: by the time the effect runs,
+  // openWork has usually started the next lookup.
+  const resetTransport = () => {
     resolvedWorkRef.current = null
     setYtVideoId(null)
     setResolveCandidates(null)
     setAdhocLine(null)
     setOccurrences([])
     setIsPlaying(false)
-    setCurrentTime(0)
-    setDuration(0)
+    resetProgress()
     setPlaybackNote(null)
     if (audioRef.current) {
       audioRef.current.pause()
       audioRef.current.src = activeWork.audioUrl || ''
     }
+  }
+  useEffect(() => {
+    resetTransport()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWork])
 
   // Sync Volume variables
@@ -441,10 +501,13 @@ export function App() {
   // replaced asking the listener to tap every couplet.
   useEffect(() => {
     if (isRecording || !ytVideoId || !duration) return
+    // In the commit where ytVideoId changes, duration is still the previous
+    // recording's; wait until this video has reported its own.
+    if (progressVideoId !== ytVideoId) return
     if (resolvedWorkRef.current !== activeWork.id) return
     void deriveTimings(activeWork, ytVideoId, duration)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWork.id, ytVideoId, duration, isRecording])
+  }, [activeWork.id, ytVideoId, duration, isRecording, progressVideoId])
 
   // Following the singer: keep the selected couplet on the one being sung.
   // (The scrolling itself happens inside the sheet, not the window.)
@@ -463,7 +526,11 @@ export function App() {
 
   const mehfilIndex = currentMehfilId ? mehfil.findIndex((m) => m.id === currentMehfilId) : -1
 
-  /** Put an entry in tonight's mehfil (if it isn't already) and make it current. */
+  /**
+   * Put an entry in tonight's mehfil (if it isn't already) and make it current.
+   * A new entry goes right after the current one (at the top when nothing is
+   * current), so whatever was waiting to come next still comes next.
+   */
   const enqueue = (entry: Omit<MehfilItem, 'id'>) => {
     const candidate = makeMehfilItem(entry)
     const existing = mehfil.find((m) => sameItem(m, candidate))
@@ -471,9 +538,22 @@ export function App() {
       setCurrentMehfilId(existing.id)
       return
     }
-    persistMehfil([...mehfil, candidate])
+    const next = mehfil.slice()
+    next.splice(mehfilIndex + 1, 0, candidate)
+    persistMehfil(next)
     setCurrentMehfilId(candidate.id)
   }
+
+  /** Add an entry to the end of tonight's mehfil for later: nothing plays, and what's current stays current. */
+  const addToMehfil = (entry: Omit<MehfilItem, 'id'>) => {
+    const candidate = makeMehfilItem(entry)
+    if (mehfil.some((m) => sameItem(m, candidate))) return false
+    persistMehfil([...mehfil, candidate])
+    return true
+  }
+
+  const isRecordingQueued = (videoId: string) =>
+    mehfil.some((m) => m.kind === 'recording' && m.videoId === videoId)
 
   const removeFromMehfil = (index: number) => {
     const item = mehfil[index]
@@ -492,16 +572,36 @@ export function App() {
   }
 
   // ---- Playback engine -----------------------------------------------------
-  const updateProgress = (current: number, dur: number) => {
+  const updateProgress = (current: number, dur: number, videoId: string | null = null) => {
     currentTimeRef.current = current
     durationRef.current = dur
+    progressVideoRef.current = videoId
     setCurrentTime(current)
     setDuration(dur)
+    setProgressVideoId(videoId)
+  }
+
+  /** A new recording starts its clock at zero instead of borrowing the last one's. */
+  const resetProgress = () => {
+    currentTimeRef.current = 0
+    durationRef.current = 0
+    progressVideoRef.current = null
+    setProgressVideoId(null)
+    setCurrentTime(0)
+    setDuration(0)
+    // Every play asks for lyrics afresh, so a replay of the same recording
+    // may need the duration re-query again too.
+    relookupDoneRef.current = null
   }
 
   const seekTo = (sec: number) => {
     if (playbackSource === 'youtube') setYtSeek(sec)
     else if (audioRef.current) audioRef.current.currentTime = sec
+  }
+
+  // Seeks the listener asks for. A jam guest's playhead belongs to the host.
+  const userSeek = (sec: number) => {
+    if (!isGuest) seekTo(sec)
   }
 
   // Resolve a YouTube recording for a curated work (cached per work id).
@@ -510,20 +610,30 @@ export function App() {
   // taking result #1 unchecked used to play a different ghazal entirely — and
   // then, correctly, find no lyrics for it. We now only auto-play a confident
   // match and otherwise let the listener choose.
-  const ensureCuratedVideo = async (work: WorkData): Promise<string | null> => {
-    if (ytVideoId && resolvedWorkRef.current === work.id) return ytVideoId
+  const ensureCuratedVideo = async (
+    work: WorkData
+  ): Promise<{ videoId: string | null; candidates: YtTrack[] | null; stale: boolean }> => {
+    if (ytVideoId && resolvedWorkRef.current === work.id) {
+      return { videoId: ytVideoId, candidates: null, stale: false }
+    }
     setResolving(true)
     setResolveCandidates(null)
+    // A newer playback intent bumps the token; this lookup then changes nothing.
+    const token = ++resolveTokenRef.current
     try {
       const params = new URLSearchParams({ title: work.title, artist: work.artist })
       const res = await fetch(`${API_BASE}/api/yt/resolve?${params.toString()}`)
       if (!res.ok) throw new Error(String(res.status))
       const data = await res.json()
+      if (token !== resolveTokenRef.current || activeWorkIdRef.current !== work.id) {
+        return { videoId: null, candidates: null, stale: true }
+      }
 
       if (data.best?.videoId) {
         resolvedWorkRef.current = work.id
+        resetProgress()
         setYtVideoId(data.best.videoId)
-        return data.best.videoId
+        return { videoId: data.best.videoId, candidates: null, stale: false }
       }
 
       const candidates: YtTrack[] = (data.candidates || []).slice(0, 5).map((r: any) => ({
@@ -536,12 +646,12 @@ export function App() {
       resolvedWorkRef.current = null
       setYtVideoId(null)
       setResolveCandidates(candidates.length ? candidates : [])
-      return null
+      return { videoId: null, candidates, stale: false }
     } catch (err) {
       console.warn('[shama] could not resolve a recording for', work.title, err)
-      return null
+      return { videoId: null, candidates: null, stale: token !== resolveTokenRef.current }
     } finally {
-      setResolving(false)
+      if (token === resolveTokenRef.current) setResolving(false)
     }
   }
 
@@ -550,6 +660,7 @@ export function App() {
     setResolveCandidates(null)
     resolvedWorkRef.current = activeWork.id
     setPlaybackSource('youtube')
+    resetProgress()
     setYtVideoId(track.videoId)
     setPlaybackNote(null)
     setIsPlaying(true)
@@ -569,14 +680,18 @@ export function App() {
     }
     setPlaybackNote(null)
     setPlaybackSource('youtube')
-    const vid =
+    const r =
       ytVideoId && resolvedWorkRef.current === activeWork.id
-        ? ytVideoId
+        ? { videoId: ytVideoId, candidates: null, stale: false }
         : await ensureCuratedVideo(activeWork)
-    if (vid) {
+    // Superseded while it looked: the newer choice owns the transport now.
+    if (r.stale) return
+    if (r.videoId) {
       setIsPlaying(true)
       return
     }
+    // The listener is being asked which recording this is; the picker says so.
+    if (r.candidates !== null) return
     // Fallback: try the (often stale) archive.org source directly.
     setPlaybackSource('archive')
     if (audioRef.current && activeWork.audioUrl) {
@@ -618,11 +733,19 @@ export function App() {
   }
 
   const openWork = async (work: any, play = false, alreadyQueued = false) => {
+    // A new choice supersedes any recording still being looked up.
+    resolveTokenRef.current++
+    setResolving(false)
     // Opening a curated ghazal drops any searched recording; the activeWork
     // effect then resets the transport.
+    const wasRecording = !!ytTrack
     setYtTrack(null)
     const resolved = await resolveWork(work)
+    // Reopening the ghazal a recording was playing over leaves activeWork
+    // unchanged, so that effect never runs and the recording would play on.
+    if (wasRecording && resolved.id === activeWork.id) resetTransport()
     setActiveWork(resolved)
+    activeWorkIdRef.current = resolved.id
     setActiveLine(resolved.lines[0])
     // Stepping through the mehfil is already pointed at its entry — enqueueing
     // again could append a duplicate if the resolved id ever drifts.
@@ -641,16 +764,17 @@ export function App() {
     setPlaybackSource('youtube')
     // ensureCuratedVideo goes to the network, so the activeWork reset effect has
     // already run by the time we ask for playback.
-    const vid = await ensureCuratedVideo(resolved)
-    if (vid) setIsPlaying(true)
-    else if (!resolveCandidates) setPlaybackNote(COPY.noRecording)
+    const r = await ensureCuratedVideo(resolved)
+    if (r.stale) return
+    if (r.videoId) setIsPlaying(true)
+    else if (r.candidates === null) setPlaybackNote(COPY.noRecording)
   }
 
   const handleLineSelect = (line: LineData) => {
     setAdhocLine(null)
     setActiveLine(line)
     const t = workLineTime(line)
-    if (t !== null) seekTo(t)
+    if (t !== null) userSeek(t)
     stopSpeaking()
   }
 
@@ -660,6 +784,8 @@ export function App() {
   const deriveTimings = useCallback(
     async (work: WorkData, videoId: string, durationSeconds: number) => {
       const cacheKey = `${work.id}:${videoId}`
+      // Another ghazal or recording may have taken over while we waited.
+      const stillCurrent = () => activeWorkIdRef.current === work.id && ytVideoIdRef.current === videoId
       const already = readAutoTimings()
       const cachedTimings = already[work.id] && already.__keys?.[work.id] === cacheKey
       // Only short-circuit once we ALSO hold a readiness measurement; otherwise
@@ -695,7 +821,7 @@ export function App() {
 
         if (!lines.length) {
           record(0)
-          setTimingState('none')
+          if (stillCurrent()) setTimingState('none')
           return
         }
         const alignRes = await fetch(`${API_BASE}/api/align-couplets`, {
@@ -710,10 +836,10 @@ export function App() {
         })
         if (!alignRes.ok) throw new Error(`align ${alignRes.status}`)
         const { aligned, matched, occurrences: occ, coverage } = await alignRes.json()
-        setOccurrences(Array.isArray(occ) ? occ : [])
+        if (stillCurrent()) setOccurrences(Array.isArray(occ) ? occ : [])
         record(typeof coverage === 'number' ? coverage : 0)
         if (!matched) {
-          setTimingState('none')
+          if (stillCurrent()) setTimingState('none')
           return
         }
         const map: Record<string, number> = {}
@@ -721,15 +847,19 @@ export function App() {
           const line = work.lines[a.index]
           if (line && a.time !== null) map[line.id] = a.time
         }
-        const next = { ...already, [work.id]: map }
-        next.__keys = { ...(already.__keys || {}), [work.id]: cacheKey }
-        next.__occurrences = { ...(already.__occurrences || {}), [cacheKey]: occ || [] }
+        // Merge into a fresh read, not `already`: another derive may have
+        // written while this one waited. Keyed, so it is kept even when this
+        // result is no longer the one on screen.
+        const latest = readAutoTimings()
+        const next = { ...latest, [work.id]: map }
+        next.__keys = { ...(latest.__keys || {}), [work.id]: cacheKey }
+        next.__occurrences = { ...(latest.__occurrences || {}), [cacheKey]: occ || [] }
         writeAutoTimings(next)
         setAutoTimings(next)
-        setTimingState('done')
+        if (stillCurrent()) setTimingState('done')
       } catch (err) {
         console.warn('[shama] could not derive couplet timings:', err)
-        setTimingState('none')
+        if (stillCurrent()) setTimingState('none')
       }
     },
     []
@@ -770,8 +900,16 @@ export function App() {
     setYtLoading(true)
     setYtError(null)
     fetch(`${API_BASE}/api/yt/search?q=${encodeURIComponent(q)}&limit=24`)
-      .then((res) => res.json())
-      .then((data) => {
+      // Keep the status: a rate limit or an outage is not "nothing found".
+      .then(async (res) => ({ ok: res.ok, status: res.status, data: await res.json().catch(() => ({})) }))
+      .then(({ ok, status, data }) => {
+        if (!ok) {
+          console.warn('[shama] recordings search failed:', status, data?.error || data?.detail)
+          setYtResults([])
+          setYtError(status === 429 ? COPY.slowDown : COPY.searchDown)
+          setYtLoading(false)
+          return
+        }
         const results: YtTrack[] = (data.results || []).map((r: any) => ({
           videoId: r.videoId,
           title: r.title,
@@ -801,6 +939,7 @@ export function App() {
 
   const fetchYtLyrics = (track: YtTrack) => {
     const { videoId, title, artist, album, durationSeconds } = track
+    lyricsLookupRef.current = { videoId, durationSeconds: durationSeconds || 0 }
 
     // Cancel any in-flight lookup: without this, switching tracks quickly let
     // the slower response land last and paint track A's lyrics over track B.
@@ -868,6 +1007,21 @@ export function App() {
     }
   }
 
+  // Collection and mehfil replays carry no duration, and a jam guest has only
+  // what the host last broadcast. Once the player knows how long THIS
+  // recording is, ask for its lyrics again with that — once per recording.
+  useEffect(() => {
+    if (!isRecording || !ytTrack || progressVideoId !== ytTrack.videoId || duration <= 0) return
+    const asked = lyricsLookupRef.current
+    if (!asked || asked.videoId !== ytTrack.videoId || relookupDoneRef.current === ytTrack.videoId) return
+    if (asked.durationSeconds && Math.abs(asked.durationSeconds - duration) <= 5) return
+    relookupDoneRef.current = ytTrack.videoId
+    const secs = Math.round(duration)
+    setYtTrack((t) => (t && t.videoId === ytTrack.videoId ? { ...t, durationSeconds: secs } : t))
+    fetchYtLyrics({ ...ytTrack, durationSeconds: secs })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRecording, ytTrack?.videoId, progressVideoId, duration])
+
   // When lyrics arrive, split them into structured couplets.
   useEffect(() => {
     if (!ytLyrics.text) {
@@ -904,6 +1058,9 @@ export function App() {
   useEffect(() => {
     const subject = adhocLine || selectedYtLine?.combined_text
     if (!isRecording || !subject) return
+    // As above: only the line now under discussion may fill the panel.
+    const ctrl = new AbortController()
+    let live = true
     setYtMeaning(null)
     setYtMeaningFailed(false)
     setYtMeaningLoading(true)
@@ -912,30 +1069,62 @@ export function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         couplet: subject,
-        poet: ytTrack?.artist || '',
+        // A searched recording names its singer, not its poet; passing the
+        // performer as the poet misattributes the verse.
+        poet: '',
         language: 'roman',
       }),
+      signal: ctrl.signal,
     })
       .then((res) => (res.ok ? res.json() : Promise.reject(res.statusText)))
       .then((data) => {
+        if (!live) return
         const clean = sanitizeMeaning(data)
         if (clean) {
           setYtMeaning(clean)
         } else {
           console.warn('[shama] meaning service returned no usable content:', data)
+          setYtMeaning(null)
           setYtMeaningFailed(true)
         }
         setYtMeaningLoading(false)
       })
       .catch((err) => {
+        if (!live) return
         console.warn('[shama] meaning request failed for the selected couplet:', err)
+        setYtMeaning(null)
         setYtMeaningFailed(true)
         setYtMeaningLoading(false)
       })
+    return () => {
+      live = false
+      ctrl.abort()
+      setYtMeaningLoading(false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRecording, adhocLine, selectedYtLine?.index, meaningNonce])
 
+  /** A searched recording as a mehfil entry. */
+  const recordingEntry = (track: YtTrack): Omit<MehfilItem, 'id'> => ({
+    kind: 'recording',
+    videoId: track.videoId,
+    title: track.title,
+    artist: track.artist,
+    thumbnail: track.coverUrl || track.thumbnail,
+  })
+
+  /**
+   * The + on a search result: the recording waits in tonight's mehfil and playback
+   * is untouched. A jam guest may add too; like reordering, that plays nothing.
+   */
+  const queueRecording = (track: YtTrack) => {
+    if (addToMehfil(recordingEntry(track))) setMehfilNotice(`Added ${track.title} to tonight’s mehfil.`)
+  }
+
   const playRecording = (track: YtTrack) => {
+    // A new choice supersedes any curated recording still being looked up.
+    resolveTokenRef.current++
+    setResolving(false)
     // Stop the archive audio engine and hand playback to YouTube.
     if (audioRef.current) audioRef.current.pause()
     setPlaybackSource('youtube')
@@ -943,21 +1132,16 @@ export function App() {
     setYtVideoId(track.videoId)
     resolvedWorkRef.current = null
     setPlaybackNote(null)
-    setCurrentTime(0)
-    setDuration(0)
+    resetProgress()
+    setOccurrences([])
     setIsPlaying(true)
     setCurrentView('LISTEN')
     fetchYtLyrics(track)
     setSelectedYtLine(null)
+    setAdhocLine(null)
     setYtMeaning(null)
     setYtCouplets([])
-    enqueue({
-      kind: 'recording',
-      videoId: track.videoId,
-      title: track.title,
-      artist: track.artist,
-      thumbnail: track.coverUrl || track.thumbnail,
-    })
+    enqueue(recordingEntry(track))
     stopSpeaking()
   }
 
@@ -1013,6 +1197,18 @@ export function App() {
       ttsAudio.currentTime = 0
     }
     setIsSpeaking(false)
+  }
+
+  /** "Replay intro": the room goes dark and the opening plays again. */
+  const replayIntro = () => {
+    stopSpeaking()
+    // A guest's record belongs to the host: it keeps turning, under a silent opening.
+    const keepPlaying = isGuest && isPlaying
+    if (isPlaying && !keepPlaying) {
+      setIsPlaying(false)
+      if (playbackSource === 'archive' && audioRef.current) audioRef.current.pause()
+    }
+    setIntro((prev) => ({ calm: prefersReducedMotion(), silent: keepPlaying, run: (prev?.run ?? 0) + 1 }))
   }
 
   const speak = async (textToSpeak: string) => {
@@ -1071,6 +1267,8 @@ export function App() {
   const nowCover = isRecording ? ytTrack!.coverUrl : activeWork.coverUrl
   nowTitleRef.current = nowTitle
   nowArtistRef.current = nowArtist
+  activeWorkIdRef.current = activeWork.id
+  ytVideoIdRef.current = ytVideoId
 
   const activeSyncedIndex = useMemo(() => {
     if (!isRecording || ytSyncedLines.length === 0) return -1
@@ -1109,15 +1307,17 @@ export function App() {
 
   // Hold on this sher until the listener has it.
   useEffect(() => {
-    if (!loopSher || !loopSpan) return
+    if (isGuest || !loopSher || !loopSpan) return
     const [start, end] = loopSpan
     // Also catch a manual seek out of the span: the loop should follow the
     // listener rather than yanking them back from wherever they went.
     if (currentTime >= end - 0.05 || currentTime < start - 1.5) seekTo(start)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loopSher, loopSpan, currentTime])
+  }, [loopSher, loopSpan, currentTime, isGuest])
 
   const toggleLoop = () => {
+    // In a jam the host holds the playhead; a guest's loop would fight the drift check.
+    if (isGuest) return
     setLoopSher((on) => {
       if (on) {
         setLoopSpan(null)
@@ -1171,8 +1371,9 @@ export function App() {
   // Sher boundaries for the timeline — real timings only (§14, §22).
   const timelineMarkers: TimelineMarker[] = useMemo(() => {
     if (isRecording) {
+      // Shifted like the highlight, so a tick sits where its line is heard.
       return ytSyncedLines.length > 4 && ytSyncedLines.length < 80
-        ? ytSyncedLines.map((l, i) => ({ id: `s${i}`, label: '', t: l.time_ms / 1000 }))
+        ? ytSyncedLines.map((l, i) => ({ id: `s${i}`, label: '', t: l.time_ms / 1000 + lyricOffset }))
         : []
     }
     // Every return to a couplet, so the ticks describe the whole recording
@@ -1186,7 +1387,7 @@ export function App() {
       .map((l) => ({ id: l.id, t: lineTime(activeWork, l) }))
       .filter((m): m is { id: string; t: number } => m.t !== null)
       .map((m, i) => ({ id: m.id, label: `Sher ${i + 1}`, t: m.t }))
-  }, [isRecording, ytSyncedLines, activeWork, lineTime, occurrences])
+  }, [isRecording, ytSyncedLines, activeWork, lineTime, occurrences, lyricOffset])
 
   const sectionLabel = useMemo(() => {
     if (isRecording || !activeSyncLineId) return null
@@ -1267,6 +1468,19 @@ export function App() {
       <div className="noise-overlay" />
       <ShaderBackdrop />
 
+      {intro && (
+        <IntroSequence
+          key={intro.run}
+          calm={intro.calm}
+          silent={intro.silent}
+          onReveal={() => setEmerging(true)}
+          onDone={() => {
+            setIntro(null)
+            setEmerging(false)
+          }}
+        />
+      )}
+
       {/* Archive.org audio engine (fallback for the curated catalog).
           Both engines live outside the view switch so changing view never
           interrupts playback. */}
@@ -1305,8 +1519,8 @@ export function App() {
         muted={isMuted}
         seekTo={ytSeek}
         onSeekConsumed={() => setYtSeek(null)}
-        onProgress={(current, dur) => {
-          if (playbackSource === 'youtube') updateProgress(current, dur)
+        onProgress={(current, dur, videoId) => {
+          if (playbackSource === 'youtube') updateProgress(current, dur, videoId)
         }}
         onPlayStateChange={(playing) => {
           if (playbackSource === 'youtube') setIsPlaying(playing)
@@ -1315,11 +1529,22 @@ export function App() {
           if (playbackSource !== 'youtube') return
           onTrackEnded()
         }}
+        onError={(code) => {
+          // Private, removed or not embeddable. The code is for us, not the page.
+          if (playbackSource !== 'youtube') return
+          console.warn('[shama] the YouTube player could not play', ytVideoId, code)
+          setIsPlaying(false)
+          setPlaybackNote(COPY.unplayable)
+        }}
       />
 
       <JamJoinPrompt jam={jam} />
 
-      <div className="shama-room">
+      {/* Out of reach while the opening plays; it rises out of the opening's light. */}
+      <div
+        className={`shama-room ${emerging ? 'shama-room--emerging' : ''}`}
+        inert={intro !== null || undefined}
+      >
         <header className="room-header">
           <div className="brand">
             <span className="liquid-logo" aria-hidden="true">
@@ -1329,10 +1554,6 @@ export function App() {
               <h1 className="brand-name">SHAMA</h1>
               <div className="brand-sub">A digital mehfil</div>
             </div>
-          </div>
-
-          <div className="room-actions">
-            <MehfilJamBar jam={jam} />
           </div>
 
           <nav className="room-nav" aria-label="Sections">
@@ -1357,6 +1578,11 @@ export function App() {
               </button>
             ))}
           </nav>
+
+          <div className="room-actions">
+            <AmbienceToggle ambience={ambience} />
+            <MehfilJamBar jam={jam} />
+          </div>
         </header>
 
         {/* ------------------------------------------------------- LISTEN -- */}
@@ -1371,6 +1597,7 @@ export function App() {
                 onMove={reorderMehfil}
                 onPlayNext={playNextInMehfil}
                 onBrowse={() => setCurrentView('LIBRARY')}
+                readOnly={isGuest}
               />
             </aside>
 
@@ -1390,7 +1617,7 @@ export function App() {
                 duration={duration}
                 markers={timelineMarkers}
                 sectionLabel={sectionLabel}
-                onSeek={seekTo}
+                onSeek={userSeek}
                 formatTime={formatTime}
                 volume={volume}
                 isMuted={isMuted}
@@ -1448,7 +1675,7 @@ export function App() {
                     setAdhocLine(null)
                     setSelectedYtLine(c)
                   }}
-                  onSeek={seekTo}
+                  onSeek={userSeek}
                   onExplainLine={(text) => {
                     setSelectedYtLine(null)
                     setAdhocLine(text)
@@ -1599,6 +1826,8 @@ export function App() {
                       type="button"
                       className="work-row-main"
                       onClick={() => void openWork(work, true)}
+                      aria-label={`Listen to ${work.title}, ${work.poet}, sung by ${work.artist}`}
+                      title="Listen now — it joins tonight’s mehfil"
                     >
                       <span className="sher-index">{String(i + 1).padStart(2, '0')}</span>
                       <span>
@@ -1630,6 +1859,8 @@ export function App() {
                         type="button"
                         className="text-btn"
                         onClick={() => void openWork(work, false)}
+                        aria-label={`Read ${work.title} without playing`}
+                        title="Open the couplets without playing"
                       >
                         Read
                       </button>
@@ -1752,47 +1983,70 @@ export function App() {
 
             {!ytLoading && ytResults.length > 0 && (
               <div className="result-grid">
-                {ytResults.map((track, idx) => (
-                  <div
-                    key={`${track.videoId}-${idx}`}
-                    className={`result-wrap ${
-                      isRecording && ytTrack?.videoId === track.videoId
-                        ? 'result-wrap--current'
-                        : ''
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      className="result-card"
-                      onClick={() => playRecording(track)}
+                {ytResults.map((track, idx) => {
+                  const queued = isRecordingQueued(track.videoId)
+                  return (
+                    <div
+                      key={`${track.videoId}-${idx}`}
+                      className={`result-wrap ${
+                        isRecording && ytTrack?.videoId === track.videoId
+                          ? 'result-wrap--current'
+                          : ''
+                      }`}
                     >
-                      <span className="result-art">
-                        {track.coverUrl ? (
-                          <img src={track.coverUrl} alt="" loading="lazy" />
-                        ) : (
-                          <Music size={20} aria-hidden="true" />
-                        )}
-                        <span className="result-art-veil">
-                          <Play size={20} aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="result-card"
+                        onClick={() => playRecording(track)}
+                      >
+                        <span className="result-art">
+                          {track.coverUrl ? (
+                            <img src={track.coverUrl} alt="" loading="lazy" />
+                          ) : (
+                            <Music size={20} aria-hidden="true" />
+                          )}
+                          <span className="result-art-veil">
+                            <Play size={20} aria-hidden="true" />
+                          </span>
                         </span>
-                      </span>
-                      <span>
-                        <span className="result-title">{track.title}</span>
-                        <span className="result-sub">
-                          {track.artist}
-                          {track.duration ? ` · ${track.duration}` : ''}
+                        <span>
+                          <span className="result-title">{track.title}</span>
+                          <span className="result-sub">
+                            {track.artist}
+                            {track.duration ? ` · ${track.duration}` : ''}
+                          </span>
                         </span>
-                      </span>
-                    </button>
-                  </div>
-                ))}
+                      </button>
+                      <button
+                        type="button"
+                        className={`result-add ${queued ? 'result-add--done' : ''}`}
+                        aria-disabled={queued || undefined}
+                        aria-label={
+                          queued
+                            ? `${track.title} is in tonight’s mehfil`
+                            : `Add ${track.title} to tonight’s mehfil`
+                        }
+                        title={queued ? 'In tonight’s mehfil' : 'Add to tonight’s mehfil'}
+                        onClick={() => {
+                          if (!queued) queueRecording(track)
+                        }}
+                      >
+                        {queued ? <Check size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             )}
+
+            <p className="sr-only" role="status">
+              {mehfilNotice}
+            </p>
 
             {!ytLoading && ytResults.length === 0 && !ytError && (
               <div className="state-block">
                 <span className="state-title">The room is quiet.</span>
-                Search above, and whatever you choose begins tonight&rsquo;s mehfil.
+                Search above, then play a recording, or press + to add it to tonight&rsquo;s mehfil.
               </div>
             )}
 
@@ -1829,6 +2083,7 @@ export function App() {
                       type="button"
                       className="work-row-main"
                       onClick={() => void openWork(work, true)}
+                      aria-label={`Listen to ${work.title}, ${pick.label}`}
                     >
                       <span className="sher-index">{pick.id}</span>
                       <span>
@@ -1852,8 +2107,13 @@ export function App() {
         )}
 
         <footer className="room-footer">
-          <span>Shama · a digital mehfil</span>
-          <span>{isStreaming && isPlaying ? 'Playing' : 'Quiet'}</span>
+          <span className="room-footer-start">
+            <span>Shama · a digital mehfil</span>
+            <button type="button" className="text-btn footer-replay" onClick={replayIntro}>
+              Replay intro
+            </button>
+          </span>
+          <span>{isStreaming && isPlaying ? 'Playing' : ambience.audible ? 'Tanpura, softly' : 'Quiet'}</span>
         </footer>
       </div>
     </main>

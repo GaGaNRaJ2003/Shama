@@ -114,7 +114,11 @@ export function ListeningStage({
       <div className="stage-art">
         {/* The candle and the turning record — the recurring SHAMA mark (§13). */}
         <div className="stage-art-scene">
-          <MehfilScene isPlaying={isPlaying} coverUrl={coverUrl} onTogglePlay={onTogglePlay} />
+          <MehfilScene
+            isPlaying={isPlaying}
+            coverUrl={coverUrl}
+            onTogglePlay={readOnly ? undefined : onTogglePlay}
+          />
         </div>
         <div className="stage-art-glow" aria-hidden="true" />
       </div>
@@ -178,6 +182,7 @@ export function ListeningStage({
             onSeek={readOnly ? () => {} : onSeek}
             formatTime={formatTime}
             sectionLabel={sectionLabel}
+            readOnly={readOnly}
           />
 
           <div className="transport-row">
@@ -226,7 +231,7 @@ export function ListeningStage({
               <SkipForward size={17} aria-hidden="true" />
             </button>
 
-            {onToggleLoop && (
+            {onToggleLoop && !readOnly && (
               <button
                 type="button"
                 className={`icon-btn ${loopSher ? 'icon-btn--on' : ''}`}
@@ -310,20 +315,22 @@ export function ListeningStage({
             <div className="candidate-picker">
               {candidates.length ? (
                 <>
+                  <span className="eyebrow eyebrow--accent" id="candidate-heading">Which recording is this?</span>
                   <p className="playback-note">
-                    We couldn&rsquo;t be certain which recording this is. Which one did you mean?
+                    Several voices have sung this ghazal, and we couldn&rsquo;t tell which one belongs here. Choose the one you want to hear.
                   </p>
-                  <ul className="candidate-list">
+                  <ul className="candidate-list" aria-labelledby="candidate-heading">
                     {candidates.map((c) => (
                       <li key={c.videoId}>
                         <button
                           type="button"
                           className="candidate-btn"
                           onClick={() => onPickCandidate(c.videoId)}
+                          aria-label={`Play the recording by ${c.artist}: ${c.title}${c.duration ? `, ${c.duration}` : ''}`}
                         >
-                          <span className="candidate-title">{c.title}</span>
+                          <span className="candidate-title">{c.artist}</span>
                           <span className="candidate-sub">
-                            {c.artist}
+                            {c.title}
                             {c.duration ? ` · ${c.duration}` : ''}
                           </span>
                         </button>

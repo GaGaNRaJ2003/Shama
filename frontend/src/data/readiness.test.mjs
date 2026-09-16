@@ -45,6 +45,9 @@ const noWords = make({ hasLyrics: false, hasSynced: false, timingReliable: false
 // The case from the screenshot: synced beautifully, but nothing to learn from.
 const syncedNoCouplets = make({ coverage: 0, couplets: 0 })
 const untimed = make({ hasSynced: false, timingReliable: false, coverage: 0 })
+// Timings borrowed from another rendition: the words and meanings are there,
+// but the page can only roughly follow the singer.
+const approx = make({ timingReliable: false, coverage: 0.8, couplets: 6 })
 
 check('a fully prepared ghazal scores near the top', score(best) >= 0.9, `(${score(best)})`)
 check('no words at all scores zero', score(noWords) === 0, `(${score(noWords)})`)
@@ -61,6 +64,10 @@ check('higher coverage ranks higher',
 check('score stays within 0..1',
   [best, noWords, syncedNoCouplets, untimed, make({ coverage: 5, couplets: 99 })]
     .every((r) => score(r) >= 0 && score(r) <= 1))
+check('approximate timings stay below the top tier',
+  score(approx) < 0.7, `(${score(approx)})`)
+check('approximate timings still beat untimed',
+  score(approx) > score(untimed), `(${score(approx)} vs ${score(untimed)})`)
 
 console.log('\n-- Honest descriptions ---------------------------------------------')
 check('no lyrics', describe(noWords) === 'no words found', `(${describe(noWords)})`)
@@ -68,6 +75,8 @@ check('untimed', describe(untimed) === 'words, not timed', `(${describe(untimed)
 check('synced without couplets does NOT claim meanings',
   !describe(syncedNoCouplets).includes('meaning'), `(${describe(syncedNoCouplets)})`)
 check('well covered advertises meanings', describe(best).includes('meanings'), `(${describe(best)})`)
+check('approximate timings are called approximate',
+  describe(approx) === 'words, timings approximate', `(${describe(approx)})`)
 check('unchecked is stated as such', describe(undefined) === 'not checked yet')
 
 console.log()

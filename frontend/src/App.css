@@ -34,7 +34,7 @@
 /* Monospace survives only for small technical metadata (§3). */
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 0.64rem;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--color-text-faint);
@@ -78,7 +78,7 @@
 
 .brand-sub {
   font-family: var(--font-mono);
-  font-size: 0.56rem;
+  font-size: 0.62rem;
   letter-spacing: 0.24em;
   text-transform: uppercase;
   color: var(--color-text-faint);
@@ -114,16 +114,19 @@
 
 .room-nav-count {
   margin-left: 6px;
-  font-size: 0.58rem;
-  color: var(--color-accent);
+  font-size: 0.64rem;
+  color: inherit;
+  opacity: 0.75;
 }
+
+.room-nav-btn--active .room-nav-count { color: var(--color-accent); opacity: 1; }
 
 /* ------------------------------------------------------------------ footer -- */
 .room-footer {
   padding: var(--space-5) 0;
   border-top: 1px solid var(--color-border-soft);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 0.62rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--color-text-faint);
@@ -131,6 +134,152 @@
   justify-content: space-between;
   gap: var(--space-4);
   flex-wrap: wrap;
+}
+
+.room-footer-start { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4); }
+.footer-replay { font-size: inherit; color: var(--color-text-faint); border-color: var(--color-border-soft); }
+
+/* ============================================================= OPENING ===== */
+/* A first visit opens on a dark room (IntroSequence). Its light hands over to
+   the diya on the stage, and the room rises out of it. */
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: #000;
+  overflow: hidden;
+}
+
+.intro-stage {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 500ms var(--ease);
+}
+
+.intro-stage canvas { display: block; }
+
+/* The corners stay in shadow, as a single flame leaves them. */
+.intro-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(0, 0, 0, 0.7) 100%);
+}
+
+.intro--scene .intro-stage { opacity: 1; }
+
+/* The dive ends in a cut, not a fade. */
+.intro--burst .intro-stage,
+.intro--reveal .intro-stage { opacity: 0; transition: none; }
+.intro--calm.intro--reveal .intro-stage { transition: opacity 700ms var(--ease); }
+
+/* The flash is the diya's gold, never white. */
+.intro-flash {
+  position: absolute;
+  inset: -10%;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, #fff2d2 0%, #f9d38f 14%, #e7a052 34%, rgba(150, 74, 26, 0.6) 58%, rgba(40, 16, 4, 0) 80%);
+}
+
+.intro--burst .intro-flash { animation: intro-flash 160ms linear forwards; }
+.intro--reveal:not(.intro--calm) .intro-flash { opacity: 0.8; animation: intro-flash-out 360ms ease-out forwards; }
+
+@keyframes intro-flash {
+  0% { opacity: 0; transform: scale(0.8); }
+  30% { opacity: 1; }
+  100% { opacity: 0.85; transform: scale(1.12); }
+}
+
+@keyframes intro-flash-out {
+  to { opacity: 0; transform: scale(1.2); }
+}
+
+/* The light going home: it gathers and settles into the stage's diya. */
+.intro-handoff {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 150vmax;
+  height: 150vmax;
+  margin: -75vmax 0 0 -75vmax;
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: radial-gradient(circle, rgba(255, 240, 205, 1) 0%, rgba(245, 206, 140, 0.85) 5%, rgba(230, 160, 90, 0.35) 18%, rgba(230, 160, 90, 0) 42%);
+}
+
+.intro--reveal { pointer-events: none; animation: intro-veil 900ms var(--ease) forwards; }
+.intro--reveal .intro-handoff { animation: intro-handoff 900ms cubic-bezier(0.5, 0, 0.25, 1) forwards; }
+.intro--calm .intro-handoff { background: radial-gradient(circle, rgba(255, 228, 180, 0.8) 0%, rgba(230, 160, 90, 0.25) 10%, rgba(230, 160, 90, 0) 26%); }
+
+@keyframes intro-veil {
+  0% { background-color: #000; }
+  55%, 100% { background-color: rgba(0, 0, 0, 0); }
+}
+
+@keyframes intro-handoff {
+  0% { opacity: 1; transform: translate(0, 0) scale(1); }
+  75% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(0.02); }
+}
+
+.intro-skip {
+  position: absolute;
+  right: max(var(--space-5), env(safe-area-inset-right));
+  bottom: max(var(--space-5), env(safe-area-inset-bottom));
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1rem;
+  color: rgba(243, 236, 226, 0.5);
+  cursor: pointer;
+  opacity: 0;
+  animation: intro-skip-in 600ms var(--ease) 900ms forwards;
+  transition: color var(--dur) var(--ease);
+}
+
+.intro-skip:hover { color: var(--color-text-primary); }
+
+/* It holds focus from the start (Enter skips), so its focus mark is quiet: a
+   box around it for the whole opening would outshine the diya. */
+.intro-skip:focus-visible {
+  outline: none;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: rgba(230, 184, 117, 0.7);
+  text-underline-offset: 5px;
+}
+.intro--burst .intro-skip,
+.intro--reveal .intro-skip { visibility: hidden; }
+
+@keyframes intro-skip-in {
+  to { opacity: 1; }
+}
+
+.shama-room--emerging { animation: room-emerge 900ms var(--ease) both; }
+
+@keyframes room-emerge {
+  0% { opacity: 0; filter: brightness(1.9) sepia(0.6) blur(6px); transform: scale(1.025); }
+  45% { opacity: 1; }
+  100% { opacity: 1; filter: none; transform: none; }
+}
+
+/* The stage's diya takes the light in, then breathes as always. */
+.stage-art--lit .stage-art-glow {
+  animation: art-lit 2.6s var(--ease) both, breathe 7s ease-in-out 2.6s infinite;
+}
+
+@keyframes art-lit {
+  0% { opacity: 1; filter: brightness(2.6) saturate(1.3); }
+  100% { opacity: 0.5; filter: none; }
 }
 
 /* ============================================================ LISTEN VIEW == */
@@ -203,7 +352,6 @@
     text-align: center;
     padding-top: var(--space-5);
   }
-  .stage-art { width: min(260px, 70vw); }
   .stage-attrib { align-items: center; }
   .transport-row { justify-content: center; }
 }
@@ -219,6 +367,8 @@
   background: radial-gradient(circle at 38% 34%, rgba(230, 184, 117, 0.10), transparent 62%), var(--color-bg-deep);
   box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.9), inset 0 0 0 1px var(--color-border-soft);
 }
+
+@media (max-width: 860px) { .stage-art { width: min(220px, 56vw); } }
 
 .stage-art-scene { position: absolute; inset: 0; }
 
@@ -482,7 +632,7 @@
   justify-content: space-between;
   margin-top: 6px;
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: 0.62rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--color-text-faint);
@@ -584,13 +734,16 @@
   font: inherit;
   color: inherit;
   transition: opacity var(--dur-slow) var(--ease), border-color var(--dur) var(--ease), background var(--dur) var(--ease);
-  opacity: 0.62;
+  opacity: 0.8;
 }
 
 .sher:hover { opacity: 0.9; background: rgba(217, 138, 91, 0.03); }
 
 /* Already heard — subdued (§5) */
-.sher--past { opacity: 0.32; }
+.sher--past { opacity: 0.6; }
+
+/* Keep the focus ring inside the .sheet scroll container so it isn't clipped. */
+.sher:focus-visible { outline-offset: -2px; }
 
 /* Selected by the reader */
 .sher--active {
@@ -657,30 +810,30 @@
 
 .sher-index {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: 0.62rem;
   letter-spacing: 0.2em;
   color: var(--color-text-faint);
 }
 
 .sher-tag {
   font-family: var(--font-mono);
-  font-size: 0.53rem;
+  font-size: 0.6rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--color-accent);
-  opacity: 0.8;
+  opacity: 0.9;
 }
 
 .sher-time {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: 0.62rem;
   letter-spacing: 0.1em;
   color: var(--color-text-faint);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
 }
 
-.sher-time--unset { opacity: 0.5; }
+.sher-time--unset { opacity: 0.7; }
 
 .sher-gloss {
   margin: var(--space-3) 0 0;
@@ -764,7 +917,7 @@
 
 .context-label {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 0.62rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--color-text-faint);
@@ -875,13 +1028,55 @@
 .mehfil-list { list-style: none; margin: var(--space-4) 0 0; padding: 0; }
 
 .mehfil-item {
+  --grip-col: 2.2em;
+  /* Positioned so the row being dragged rises above its neighbours. */
+  position: relative;
   display: grid;
-  grid-template-columns: 2.2em minmax(0, 1fr) auto;
+  grid-template-columns: var(--grip-col) minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: center;
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--color-border-soft);
 }
+
+/* The number doubles as the drag handle: on hover it turns into a grip. */
+.mehfil-grip {
+  display: grid;
+  align-items: center;
+  justify-items: start;
+  align-self: stretch;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mehfil-grip > * { grid-area: 1 / 1; transition: opacity var(--dur-quick) var(--ease); }
+.mehfil-grip-icon { opacity: 0; color: var(--color-text-muted); }
+.mehfil-item--current .mehfil-grip-icon { color: var(--color-accent); }
+
+@media (hover: hover) {
+  .mehfil-item:hover .mehfil-num,
+  .mehfil-item--dragging .mehfil-num { opacity: 0; }
+  .mehfil-item:hover .mehfil-grip-icon,
+  .mehfil-item--dragging .mehfil-grip-icon { opacity: 1; }
+  .mehfil-grip:hover .mehfil-grip-icon { color: var(--color-highlight); }
+}
+
+/* Lifted off the list while it moves; the others glide out of its way. */
+.mehfil-item--dragging {
+  background: #1f1a16;
+  border-bottom-color: transparent;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 1px var(--color-border-hover), 0 18px 34px -16px rgba(0, 0, 0, 0.85);
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mehfil-item--dragging .mehfil-grip { cursor: grabbing; }
+.mehfil-item--dragging .mehfil-grip-icon { color: var(--color-highlight); }
+.mehfil-item--dragging .mehfil-item-title { color: var(--color-text-primary); }
 
 .mehfil-item-main {
   background: none;
@@ -896,7 +1091,7 @@
 
 .mehfil-num {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 0.64rem;
   letter-spacing: 0.1em;
   color: var(--color-text-faint);
   font-variant-numeric: tabular-nums;
@@ -951,9 +1146,12 @@
   transition: color var(--dur) var(--ease);
 }
 
-.ghost-btn:hover:not(:disabled) { color: var(--color-highlight); }
-.ghost-btn:disabled { opacity: 0.25; cursor: not-allowed; }
-.ghost-btn--danger:hover:not(:disabled) { color: #d98080; }
+.ghost-btn:hover:not(:disabled, [aria-disabled="true"]) { color: var(--color-highlight); }
+/* aria-disabled keeps a button focusable, so focus isn't thrown elsewhere when
+   a queue row reaches the end of the list. */
+.ghost-btn:disabled,
+.ghost-btn[aria-disabled="true"] { opacity: 0.25; cursor: not-allowed; }
+.ghost-btn--danger:hover:not(:disabled, [aria-disabled="true"]) { color: #d98080; }
 
 /* ============================================== LIBRARY / EXPLORE PAGES ==== */
 
@@ -1003,7 +1201,7 @@
   transition: border-color var(--dur) var(--ease);
 }
 
-.search-field:focus-within { border-color: var(--color-border-hover); }
+.search-field:focus-within { border-color: var(--color-highlight); box-shadow: 0 1px 0 0 var(--color-highlight); }
 
 .search-field input {
   flex: 1;
@@ -1070,9 +1268,12 @@
   transition: opacity var(--dur) var(--ease);
 }
 
-.work-row-main:hover { opacity: 0.75; }
+.work-row:hover { background: rgba(217, 138, 91, 0.03); }
+
+.work-row-main:hover .work-title { color: var(--color-highlight); }
 
 .work-title {
+  transition: color var(--dur) var(--ease);
   display: block;
   font-family: var(--font-serif);
   font-size: 1.22rem;
@@ -1090,11 +1291,11 @@
 
 .work-mood {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: 0.62rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--color-accent);
-  opacity: 0.7;
+  opacity: 0.9;
   display: block;
   margin-top: 4px;
 }
@@ -1191,6 +1392,47 @@
 .result-remove:focus-visible { opacity: 1; }
 .result-remove:hover { color: #d98080; }
 
+/* + on a search result: adds it to tonight's mehfil. Always in view, since it is
+   the card's second action; it turns to a check once the recording is queued. */
+.result-add {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-veil);
+  color: var(--color-flame);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.result-add:hover,
+.result-add:focus-visible { border-color: var(--color-highlight); background: rgba(12, 10, 9, 0.9); }
+
+.result-add--done,
+.result-add--done:hover {
+  color: var(--color-highlight);
+  border-color: var(--color-border-hover);
+  background: var(--color-veil);
+  cursor: default;
+}
+
+/* Touch screens have no hover to reveal these, so they stay in view. */
+@media (hover: none) {
+  .mehfil-item-actions,
+  .result-remove { opacity: 1; }
+  /* The grip sits beside the number instead of replacing it. */
+  .mehfil-item { --grip-col: 3.4em; }
+  .mehfil-grip { grid-auto-flow: column; justify-content: start; gap: 6px; }
+  .mehfil-grip > * { grid-area: auto; }
+  .mehfil-grip-icon { opacity: 1; order: -1; }
+}
+
 /* --------------------------------------------------------- lyric streams -- */
 .lyric-stream { display: grid; gap: 2px; }
 
@@ -1202,7 +1444,7 @@
   margin: 0;
   padding: 2px 0;
   transition: color var(--dur) var(--ease), opacity var(--dur) var(--ease);
-  opacity: 0.68;
+  opacity: 0.85;
 }
 
 .lyric-line--active {
@@ -1340,9 +1582,13 @@
   .sheet { max-height: 70vh; }
   .context-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .word-term { min-width: 0; }
-  .room-footer { font-size: 0.54rem; letter-spacing: 0.14em; }
+  .room-footer { font-size: 0.6rem; letter-spacing: 0.14em; }
   /* Phones have hardware volume; the slider only makes the row wrap. */
   .volume input[type="range"] { display: none; }
+  /* Queue actions get their own row so the title keeps its full width. */
+  .mehfil-item { grid-template-columns: var(--grip-col) minmax(0, 1fr); }
+  .mehfil-item-actions { grid-column: 2; justify-content: flex-start; gap: var(--space-2); }
+  .transport-row { gap: var(--space-2); }
 }
 
 /* ========================================================== MEHFIL JAM ===== */
@@ -1351,11 +1597,51 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  order: 3;
 }
 
-@media (max-width: 620px) {
-  .room-actions { order: 2; }
+/* The room's tanpura — as quiet in the header as it is in the speakers. */
+.ambience-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+
+.ambience-toggle--off { color: var(--color-text-faint); }
+.ambience-toggle--sounding { color: var(--color-highlight); }
+.ambience-toggle:hover { color: var(--color-highlight); }
+
+.ambience-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 10px;
+}
+
+.ambience-bars span {
+  width: 2px;
+  height: 3px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.ambience-toggle--sounding .ambience-bars span { animation: ambience-breathe 3.2s var(--ease) infinite; }
+.ambience-toggle--sounding .ambience-bars span:nth-child(2) { animation-delay: -1.1s; }
+.ambience-toggle--sounding .ambience-bars span:nth-child(3) { animation-delay: -2.2s; }
+.ambience-toggle--waiting .ambience-bars { animation: pulse-soft 2.4s var(--ease) infinite; }
+
+@keyframes ambience-breathe {
+  0%, 100% { height: 3px; }
+  50% { height: 10px; }
 }
 
 .jam-bar {
@@ -1373,7 +1659,7 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: 0.62rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--color-highlight);
@@ -1415,7 +1701,8 @@
 /* ------------------------------------- choosing the right recording ------- */
 /* Shown when we can't confidently tell which recording a ghazal is. Asking is
    better than silently playing a different poem. */
-.candidate-picker { margin-top: var(--space-3); }
+.candidate-picker { margin-top: var(--space-4); text-align: left; }
+.candidate-picker .playback-note { max-width: none; margin: var(--space-2) 0 0; }
 
 .candidate-list {
   list-style: none;
@@ -1432,7 +1719,9 @@
   background: none;
   border: 0;
   border-left: 1px solid var(--color-border);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  min-height: 48px;
+  border-left-color: var(--color-border-strong);
   cursor: pointer;
   font: inherit;
   color: inherit;
@@ -1444,18 +1733,20 @@
   background: rgba(217, 138, 91, 0.04);
 }
 
+.candidate-btn:focus-visible { border-left-color: var(--color-accent); background: rgba(217, 138, 91, 0.06); }
+
 .candidate-title {
   display: block;
   font-family: var(--font-serif);
-  font-size: 0.98rem;
+  font-size: 1.05rem;
   color: var(--color-text-primary);
 }
 
 .candidate-sub {
   display: block;
   font-family: var(--font-serif);
-  font-size: 0.85rem;
-  color: var(--color-text-faint);
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
 }
 
 .rendition-list {
@@ -1475,7 +1766,7 @@
 .lyric-explain {
   margin-left: var(--space-3);
   font-family: var(--font-mono);
-  font-size: 0.5rem;
+  font-size: 0.6rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--color-text-faint);
@@ -1503,7 +1794,7 @@
 
 .work-ready {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: 0.62rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -1512,3 +1803,21 @@
 .work-ready--full { color: var(--color-highlight); }
 .work-ready--part { color: var(--color-text-muted); }
 .work-ready--thin { color: var(--color-text-faint); }
+
+/* ------------------------------------------------ touch targets (coarse) -- */
+@media (pointer: coarse) {
+  .text-btn, .segmented-btn, .room-nav-btn, .mood-chip, .ambience-toggle, .attrib-poet, .attrib-singer, .link-value, .lyric-explain { position: relative; }
+  .text-btn::after, .segmented-btn::after, .room-nav-btn::after, .mood-chip::after, .ambience-toggle::after, .attrib-poet::after, .attrib-singer::after, .link-value::after, .lyric-explain::after { content: ''; position: absolute; inset: -12px -4px; }
+  .icon-btn { width: 40px; height: 40px; }
+  .result-add { width: 40px; height: 40px; }
+  .ghost-btn { padding: 10px; }
+  .timeline { padding: 16px 0; }
+}
+
+/* --------------------------------------- desktop stage: art pinned to top -- */
+@media (min-width: 861px) {
+  .mehfil-room:not(.mehfil-room--quiet) .stage { align-items: start; }
+  .mehfil-room:not(.mehfil-room--quiet) .stage-art { margin-top: var(--space-3); position: sticky; top: var(--space-5); }
+  .mehfil-room:not(.mehfil-room--quiet) .hero-urdu,
+  .mehfil-room:not(.mehfil-room--quiet) .stage-form { text-align: left; }
+}

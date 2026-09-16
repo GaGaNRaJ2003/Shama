@@ -157,8 +157,9 @@ export function RecordingSheet({
                   onClick={(e) => {
                     // Plain tap jumps the audio; with a modifier, or via the
                     // explain affordance, it becomes the subject of the panel.
+                    // The seek carries the offset, as the highlight does.
                     if (onExplainLine && (e.metaKey || e.ctrlKey || e.altKey)) onExplainLine(text)
-                    else onSeek(line.time_ms / 1000)
+                    else onSeek(Math.max(0, line.time_ms / 1000 + offset))
                   }}
                 >
                   <span className={`lyric-line ${i === activeSyncedIndex ? 'lyric-line--active' : ''}`}>

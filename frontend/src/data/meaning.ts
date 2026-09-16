@@ -20,7 +20,7 @@ export interface Meaning {
 
 /** Anything that reads like plumbing rather than poetry. */
 const LEAK =
-  /error code|api[\s_-]?key|rate[\s-]?limit|status \d{3}|\bgroq\b|\bgemini\b|\bopenai\b|\banthropic\b|\bollama\b|\bmistral\b|\bllama\b|\bgpt-|\bclaude-|\bprovider|models?\/|\{\s*['"]error|traceback|temporarily unavailable|currently unavailable|could not generate|couldn't generate|free[\s-]?tier|try again in a (?:minute|moment)|no longer available|update your code|\bendpoint\b|\bhttp\b/i
+  /error code|api[\s_-]?key|rate[\s-]?limit|status \d{3}|\bgroq\b|\bgemini\b|\bopenai\b|\banthropic\b|\bollama\b|\bmistral\b|\bllama\b|\bgpt-|\bclaude-|models?\/|\{\s*['"]error|traceback|could not generate|couldn't generate|free[\s-]?tier|try again in a (?:minute|moment)|update your code|https?:\/\//i
 
 const NON_ANSWERS = new Set(['unavailable', 'unknown', 'n/a', 'none', 'null'])
 
