@@ -67,6 +67,12 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      # Not optional in practice. RLS grants writes on couplet_meanings to
+      # service_role only, so on the anon key the meaning cache takes a 42501
+      # and silently stops caching — every couplet then costs an LLM call
+      # against a free-tier quota. Same key covers the RAG table reads.
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
 
   # The API + mehfil WebSocket. BACKEND_PORT, not PORT: server.ts reads
   # BACKEND_PORT deliberately (the shared root .env sets PORT=8000 for the
