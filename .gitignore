@@ -47,6 +47,8 @@ _lrc*
 # Python virtual environments
 .venv/
 **/.venv/
+venv/
+**/venv/
 
 # Python cache
 __pycache__/
@@ -54,3 +56,8 @@ __pycache__/
 
 # Build info
 *.tsbuildinfo
+
+# Corpus snapshots and scrape test output (local scratch)
+ml-engine/data/*.backup.jsonl
+ml-engine/data/*.pre-harvest.jsonl
+ml-engine/data/raw/test_*.jsonl
