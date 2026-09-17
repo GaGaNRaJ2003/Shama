@@ -343,10 +343,13 @@ peak is about −20 dBFS.
    - Update any deployed environment that still uses the old keys.
 2. ~~Delete the junk cache row~~ `aa2ddc4b567fbb30337e3a324d58b8db`: done,
    deleted by the owner on 2026-09-12 (8.3).
-3. **Deploy config runs dead code.** `ml-engine/deploy/render.yaml` and
-   `docker/Dockerfile` start `uvicorn ml-engine.api.main:app`. That is the dead
-   `api/main.py`, reached through an unimportable hyphenated path, so none of
-   the ML engine fixes would be deployed. Point them at `main:app`.
+3. ~~**Deploy config runs dead code.**~~ Fixed on 2026-09-18. The old
+   `ml-engine/deploy/render.yaml` and `vercel.json` described an architecture
+   with no Node backend, and both they and `docker/Dockerfile` started
+   `uvicorn ml-engine.api.main:app` — the dead `api/main.py`, through an
+   unimportable hyphenated path. The two configs are replaced by a root
+   `render.yaml` covering all three services; the Dockerfile now starts
+   `main:app`.
 4. **LAN exposure.** Express listens on all interfaces and `next dev`
    advertises a LAN URL, so the meaning, TTS and YT routes are reachable from
    the network behind per-IP rate limits only. Bind to 127.0.0.1 in dev, or

@@ -48,4 +48,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:${PORT:-10000}/health || exit 1
 
 # Start the application
-CMD ["sh", "-c", "uvicorn ml-engine.api.main:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --limit-concurrency 10"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1 --limit-concurrency 10"]

@@ -3,6 +3,10 @@
 # Install: pip install -r requirements.txt
 # =============================================================================
 
+# torch is pinned to a +cpu build, which lives on PyTorch's own index, not
+# PyPI. Without this line `pip install -r requirements.txt` cannot resolve it.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # --- Core API Framework ---
 fastapi==0.115.6
 uvicorn[standard]==0.34.0

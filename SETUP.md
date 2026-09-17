@@ -350,8 +350,6 @@ Shama/
 │   │   ├── schema.py             # Pydantic training schema
 │   │   └── corpus_builder.py     # Dedup + validate + merge
 │   └── deploy/                   # Production deployment
-│       ├── render.yaml           # Render IaC
-│       ├── vercel.json           # Vercel rewrites
 │       ├── docker/Dockerfile     # Container for Render
 │       ├── architecture.md       # System design doc
 │       └── supabase_migrations/
@@ -457,3 +455,54 @@ ahmed-faraz
 ### The Key Insight
 
 You don't need to "add songs" — YT Music already gives you infinite playback. What scraping does is make the **AI meaning engine smarter** by giving it more reference material. The more couplets in your vector DB, the better the LLM interprets unfamiliar verses.
+
+---
+
+## Deploying to Production
+
+Shama does not fit on one host. The frontend is a static Next build and goes to
+Vercel; the other three services each need a process that stays up — `backend`
+holds a WebSocket upgrade for Listen Together, and the Python services carry
+caches and a model. Those three go to Render, declared in the root
+`render.yaml`.
+
+The two halves reference each other, so the order matters:
+
+**1. Render first** — dashboard → New → Blueprint → this repo. It reads
+`render.yaml` and creates `shama-yt-service`, `shama-ml-engine` and
+`shama-api`, prompting for the secrets (copy them from the root `.env`).
+Leave `FRONTEND_URL` blank for now. Once the two Python services are live,
+set on `shama-api`:
+
+```
+YT_SERVICE_URL=https://shama-yt-service.onrender.com
+ML_ENGINE_URL=https://shama-ml-engine.onrender.com
+```
+
+(Use whatever URLs Render actually assigned — it appends a suffix if a name
+is taken.)
+
+**2. Vercel second** — import the repo, set **Root Directory** to `frontend`,
+and add one environment variable:
+
+```
+NEXT_PUBLIC_API_BASE=https://shama-api.onrender.com
+```
+
+`useMehfilJam` derives the mehfil socket from that value, so `https` becomes
+`wss` on its own. Nothing else needs configuring.
+
+**3. Back to Render** — set `FRONTEND_URL` on `shama-api` to the Vercel domain
+(`https://your-app.vercel.app`). It is the CORS allowlist: until it is right,
+every call from the browser is rejected. Multiple origins are comma-separated.
+
+### What to expect on the free tier
+
+- Instances sleep after 15 minutes idle. The first listener of the evening
+  waits 30–60s while all three wake; guests joining an active mehfil don't.
+- The ML engine imports torch lazily, so it boots small. The first RAG lookup
+  loads the model, and that is where 512MB is most likely to run out. If
+  `/api/meaning` starts failing in production, that is the reason.
+- The YT bridge scrapes an unofficial API. A datacenter IP draws rate limits
+  much sooner than a home one — if search dies in production but works
+  locally, this is why, not your code.

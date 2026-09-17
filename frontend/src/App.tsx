@@ -41,7 +41,9 @@ import {
   type MehfilItem,
 } from './data/mehfil'
 
-const API_BASE = 'http://localhost:5000'
+// Set NEXT_PUBLIC_API_BASE to the deployed backend (Render); the ws URL for
+// Listen Together is derived from it in useMehfilJam, so https becomes wss.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5000'
 
 // The opening (three.js) loads only when it plays; the dark stands in meanwhile.
 const IntroSequence = dynamic(() => import('./components/aesthetic/IntroSequence').then((m) => m.IntroSequence), {

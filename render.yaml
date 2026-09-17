@@ -1,0 +1,100 @@
+# Render Blueprint — the three services Vercel can't host.
+#
+# The frontend goes to Vercel; everything here needs a process that stays up:
+# backend/src/jam.ts holds a WebSocket upgrade for Listen Together, and the two
+# Python services carry state and models a serverless function can't keep warm.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. The `sync:
+# false` vars are prompted for on first deploy; fill them from the root .env.
+#
+# Free instances sleep after 15 minutes idle, so the first listener of the
+# evening waits ~30-60s while all three wake.
+
+services:
+  # YouTube Music bridge. Note: this scrapes an unofficial API, and a datacenter
+  # IP draws rate limits far sooner than a home one. If search starts failing in
+  # production, this is the first thing to check.
+  - type: web
+    name: shama-yt-service
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: ytmusic-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+  # Meaning + TTS + RAG. torch and sentence-transformers are imported lazily
+  # (ml-engine/main.py:210), so the service boots small; the first RAG lookup is
+  # what loads the model, and that is where a 512MB instance is most likely to
+  # run out of memory. Move to a paid instance if /api/meaning starts dying.
+  - type: web
+    name: shama-ml-engine
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: ml-engine
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: TORCH_CPU_ONLY
+        value: "1"
+      - key: CACHE_TTL_SECONDS
+        value: "86400"
+      - key: MAX_CONCURRENT_REQUESTS
+        value: "10"
+      - key: TRANSFORMERS_CACHE
+        value: /opt/render/.cache/huggingface
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+  # The API + mehfil WebSocket. BACKEND_PORT, not PORT: server.ts reads
+  # BACKEND_PORT deliberately (the shared root .env sets PORT=8000 for the
+  # Python services), so the start command hands Render's port across.
+  - type: web
+    name: shama-api
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: backend
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: BACKEND_PORT=$PORT node dist/server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # The CORS allowlist, comma-separated. Must hold the Vercel domain or
+      # every browser call is rejected. e.g. https://shama.vercel.app
+      - key: FRONTEND_URL
+        sync: false
+      # Full URLs with scheme, from the two services above once they're live.
+      # e.g. https://shama-yt-service.onrender.com
+      - key: YT_SERVICE_URL
+        sync: false
+      - key: ML_ENGINE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
