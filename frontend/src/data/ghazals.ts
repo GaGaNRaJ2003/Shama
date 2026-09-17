@@ -55,7 +55,7 @@ export const catalog: WorkData[] = [
     poet: 'Mirza Ghalib',
     form: 'Ghazal',
     audioUrl: '',
-    coverUrl: '/cover_01.png',
+    coverUrl: '/cover_01.webp',
     ytQuery: 'Dil-e-nadan Tujhe Hua Kya Hai Jagjit Singh Chitra Singh',
     mood: 'Wonder & Restlessness',
     lines: [
@@ -164,7 +164,7 @@ export const catalog: WorkData[] = [
     poet: 'Fayyaz Hashmi',
     form: 'Geet / Ghazal',
     audioUrl: '',
-    coverUrl: '/cover_02.png',
+    coverUrl: '/cover_02.webp',
     ytQuery: 'Aaj Jane Ki Zid Na Karo Farida Khanum',
     mood: 'Longing & Pleading',
     lines: [
@@ -273,7 +273,7 @@ export const catalog: WorkData[] = [
     poet: 'Faiz Ahmed Faiz',
     form: 'Ghazal',
     audioUrl: '',
-    coverUrl: '/cover_03.png',
+    coverUrl: '/cover_03.webp',
     ytQuery: 'Gulon Mein Rang Bhare Mehdi Hassan',
     mood: 'Hope & Exile',
     lines: [
@@ -874,11 +874,11 @@ export const catalog: WorkData[] = [
     id: '09',
     title: 'Wo Jo Hum Mein Tum Mein Qarar Tha',
     artist: 'Abida Parveen',
-    poet: 'Faiz Ahmed Faiz',
+    poet: 'Momin Khan Momin',
     form: 'Ghazal',
     audioUrl: '',
     coverUrl: '',
-    ytQuery: 'Wo Jo Hum Mein Tum Mein Qarar Tha Abida Parveen Faiz',
+    ytQuery: 'Wo Jo Hum Mein Tum Mein Qarar Tha Abida Parveen Momin',
     mood: 'Loss & Remembrance',
     lines: [
       {
@@ -938,7 +938,7 @@ export const catalog: WorkData[] = [
         transliteration: 'Jo mujhe masarrat aur gham diye the tum ne',
         translation: 'The happiness and grief you bestowed upon me —',
         simple: 'He catalogues what she gave him: both joy and pain, equally treasured.',
-        detailed: 'By placing "masarrat" (joy) and "gham" (grief) side by side as equal gifts, Faiz dissolves the boundary between pleasure and pain in love.',
+        detailed: 'By placing "masarrat" (joy) and "gham" (grief) side by side as equal gifts, the poet dissolves the boundary between pleasure and pain in love.',
         vocabulary: [
           { term: 'Masarrat', meaning: 'Joy, happiness' },
           { term: 'Gham', meaning: 'Grief, sorrow' }
@@ -954,7 +954,7 @@ export const catalog: WorkData[] = [
         transliteration: 'Wo jo shab ke ham-nashīñ the, tumheñ yād ho ke na yād ho',
         translation: 'Those who sat with us through the night — whether you remember or not.',
         simple: 'He recalls the companions who shared their evenings, wondering if she even remembers them.',
-        detailed: '"Shab ke ham-nasheen" (companions of the night) could be fellow revolutionaries or fellow lovers — the ambiguity is deliberate in Faiz\'s dual-register poetry.',
+        detailed: '"Shab ke ham-nasheen" (companions of the night) are the friends of those shared evenings; the refrain asks whether she keeps them in memory as he does.',
         vocabulary: [
           { term: 'Shab', meaning: 'Night' },
           { term: 'Ham-nasheen', meaning: 'Companions, those who sit together' }

@@ -157,7 +157,7 @@ See **[SETUP.md](./SETUP.md)** for detailed step-by-step instructions including 
 | 06 | Hazaaron Khwahishein Aisi | Mirza Ghalib | Jagjit Singh |
 | 07 | Koi Umeed Bar Nahin Aati | Mirza Ghalib | Mehdi Hassan |
 | 08 | Mujhse Pehli Si Mohabbat | Faiz Ahmed Faiz | Noor Jehan |
-| 09 | Wo Jo Hum Mein Tum Mein Qarar Tha | Faiz Ahmed Faiz | Abida Parveen |
+| 09 | Wo Jo Hum Mein Tum Mein Qarar Tha | Momin Khan Momin | Abida Parveen |
 | 10 | Tujhe Yaad Na Meri Aayi | Mir Taqi Mir | Mehdi Hassan |
 
 Plus **infinite songs** via YT Music search — AI meanings work for all of them.

@@ -1,0 +1,657 @@
+/* The arrival: how the room opens before anything is chosen.
+
+   Two columns on one grid line. The art (400px) sits on the left, its top level
+   with the heading's; the diya's flame falls beside the heading, and the pair
+   reads first. Beneath the heading hangs the farmaish, rolled up and waiting;
+   it unrolls in the page's flow. Spacing keeps to 8 / 16 / 24 / 32 / 48 / 64 / 96. */
+
+/* ------------------------------------------------------------ layout -- */
+
+.mehfil-room--bare {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "stage" "study";
+}
+
+.mehfil-room--bare .mehfil-aside { display: none; }
+
+.mehfil-study[hidden] { display: none; }
+
+.stage--arrival {
+  grid-template-columns: minmax(0, 400px) minmax(0, 1fr);
+  column-gap: 96px;
+  align-items: start;
+  padding: 48px 0;
+}
+
+.stage--arrival > .stage-hero { position: relative; }
+
+/* The art's top edge is the heading's. */
+.mehfil-room .stage.stage--arrival > .stage-art { margin-top: 0; }
+
+/* While the art resizes, the canvas follows the box instead of cropping. */
+.stage-art-scene canvas { width: 100% !important; height: 100% !important; }
+
+@media (max-width: 1180px) {
+  .stage--arrival { grid-template-columns: minmax(0, 340px) minmax(0, 1fr); column-gap: 64px; }
+}
+
+@media (max-width: 860px) {
+  .stage--arrival {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+    text-align: left;
+    row-gap: 32px;
+    padding-top: 32px;
+  }
+  .stage--arrival > .stage-art { width: min(300px, 78vw); justify-self: center; }
+}
+
+/* What appears once a choice is made eases in behind the settling art. */
+.mehfil-room--arrived .mehfil-aside,
+.mehfil-room--arrived .mehfil-study,
+.mehfil-room--arrived .stage-hero {
+  animation: arrival-settle 700ms var(--ease) 180ms both;
+}
+
+@keyframes arrival-settle {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ------------------------------------------------------------ heading -- */
+
+.arrival { animation: sher-in var(--dur-slow) var(--ease); }
+
+.arrival-head { margin-bottom: 32px; }
+
+.arrival-urdu {
+  font-family: var(--font-urdu);
+  font-size: 1.125rem;
+  line-height: 1.9;
+  color: var(--color-accent);
+  opacity: 0.85;
+  margin: -6px 0 8px;
+  text-align: left;
+}
+
+.arrival-title {
+  font-family: var(--font-serif);
+  font-size: clamp(2.1rem, 2.6vw, 2.6rem);
+  font-weight: 400;
+  line-height: 1.08;
+  max-width: 8.4em;
+  margin: 0 0 16px;
+  color: var(--color-text-primary);
+}
+
+.arrival-lede {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  max-width: 30em;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------- feelings -- */
+
+/* A way in by feeling, under both columns: ten ghazals, each a state of the
+   heart with its own faint colour (--hue). */
+.feelings {
+  padding: 0 0 64px;
+  animation: sher-in var(--dur-slow) var(--ease) 80ms both;
+}
+
+.feelings-head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding-top: 32px;
+  margin-bottom: 24px;
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.feelings-title {
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.feelings-urdu {
+  font-family: var(--font-urdu);
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--color-accent);
+  opacity: 0.85;
+}
+
+.feelings-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+}
+
+.feelings-grid > li { animation: sher-in var(--dur-slow) var(--ease) both; }
+
+.feeling {
+  --hue: var(--color-highlight);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 196px;
+  padding: 12px 16px 18px;
+  overflow: hidden;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background:
+    radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--hue) 13%, transparent), transparent 70%),
+    var(--color-surface);
+  transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+/* Candlelight rising from below on hover. */
+.feeling::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 70%;
+  pointer-events: none;
+  background: radial-gradient(90% 100% at 50% 100%, color-mix(in srgb, var(--hue) 22%, transparent), transparent 72%);
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
+.feeling:hover,
+.feeling:focus-visible {
+  border-color: color-mix(in srgb, var(--hue) 55%, transparent);
+  transform: translateY(-2px);
+  box-shadow: 0 18px 40px -24px color-mix(in srgb, var(--hue) 60%, transparent);
+}
+
+.feeling:hover::after,
+.feeling:focus-visible::after { opacity: 1; }
+
+.feeling:focus-visible { outline: 1px solid var(--hue); outline-offset: 2px; }
+
+.feeling-urdu {
+  align-self: flex-end;
+  font-family: var(--font-urdu);
+  font-size: 1.9rem;
+  line-height: 2.05; /* Nastaliq descends well below its baseline */
+  color: color-mix(in srgb, var(--hue) 72%, var(--color-text-primary));
+  text-shadow: 0 0 24px color-mix(in srgb, var(--hue) 40%, transparent);
+}
+
+.feeling-name {
+  margin-top: 2px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.92rem;
+  color: var(--color-text-muted);
+}
+
+.feeling-rule {
+  display: block;
+  height: 1px;
+  margin: 14px 0 12px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--hue) 55%, transparent), transparent);
+}
+
+.feeling-title {
+  position: relative;
+  font-family: var(--font-serif);
+  font-size: 1.12rem;
+  line-height: 1.22;
+  color: var(--color-text-primary);
+}
+
+.feeling-by {
+  position: relative;
+  margin-top: 4px;
+  padding-right: 36px;
+  font-family: var(--font-serif);
+  font-size: 0.86rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+.feeling-play {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--color-bg-deep);
+  background: color-mix(in srgb, var(--hue) 65%, var(--color-flame));
+  box-shadow: 0 0 18px -4px color-mix(in srgb, var(--hue) 70%, transparent);
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.feeling:hover .feeling-play,
+.feeling:focus-visible .feeling-play { opacity: 1; transform: none; }
+
+@media (hover: none) {
+  .feeling-play { opacity: 0.9; transform: none; }
+}
+
+@media (max-width: 1100px) {
+  .feelings-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  .feeling { padding: 10px 12px 16px; }
+  .feeling-title { font-size: 1.02rem; }
+}
+
+@media (max-width: 900px) {
+  .feelings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .feeling { min-height: 172px; }
+}
+
+/* ------------------------------------------------- the farmaish scroll -- */
+
+/* Hung beneath the heading, a little in from the column's edge. As it unrolls
+   its box grows with the cloth (set from the script), so the page makes way. */
+.farmaish-scroll {
+  position: relative;
+  height: 64px;
+  margin: 48px 0 0 min(12%, 64px);
+}
+
+/* Rolled up, it breathes a little light to say it can be opened. */
+.farmaish-scroll::before {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: -18px;
+  height: 76px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(ellipse, rgba(242, 201, 138, 0.22), transparent 70%);
+  animation: farmaish-beckon 4.2s ease-in-out infinite;
+}
+
+.farmaish-scroll--open::before { display: none; }
+
+@keyframes farmaish-beckon {
+  0%, 100% { opacity: 0.25; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+.farmaish-scroll-cloth {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+}
+
+.farmaish-scroll-halo {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: -24px;
+  height: 90px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(ellipse, rgba(242, 201, 138, 0.42), rgba(217, 138, 91, 0.12) 45%, transparent 70%);
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 500ms var(--ease), transform 500ms var(--ease);
+}
+
+.farmaish-scroll:not(.farmaish-scroll--open):hover .farmaish-scroll-halo,
+.farmaish-scroll:not(.farmaish-scroll--open):focus-within .farmaish-scroll-halo { opacity: 0.55; transform: scale(1); }
+
+.farmaish-scroll--glow .farmaish-scroll-halo {
+  opacity: 1;
+  transform: scale(1.12);
+  transition-duration: 260ms;
+}
+
+.farmaish-scroll--open .farmaish-scroll-halo { transition-duration: 900ms; }
+
+/* The roll itself is the button; its label hangs beneath it. */
+.farmaish-scroll-roll {
+  position: absolute;
+  top: 0;
+  height: 64px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 20px;
+  cursor: pointer;
+}
+
+.farmaish-scroll--open .farmaish-scroll-roll { height: 40px; }
+
+.farmaish-scroll-roll:focus-visible { outline: 1px solid var(--color-flame); outline-offset: 4px; }
+
+.farmaish-scroll-label {
+  position: absolute;
+  right: 18px;
+  bottom: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  transition: color var(--dur) var(--ease);
+}
+
+.farmaish-scroll-roll:hover .farmaish-scroll-label { color: var(--color-highlight); }
+
+.farmaish-scroll-urdu {
+  font-family: var(--font-urdu);
+  font-style: normal;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-accent);
+}
+
+/* A tassel on the tie, stirring now and then. */
+.farmaish-scroll-tassel {
+  position: absolute;
+  left: 50%;
+  top: 34px;
+  width: 3px;
+  height: 20px;
+  margin-left: -1px;
+  pointer-events: none;
+  transform-origin: 50% 0;
+  background: linear-gradient(180deg, #96221e, #b83a2e 60%, #e0a860);
+  border-radius: 0 0 2px 2px;
+  animation: farmaish-tassel 4.5s ease-in-out infinite;
+}
+
+.farmaish-scroll-tassel::after {
+  content: "";
+  position: absolute;
+  left: -3px;
+  bottom: -7px;
+  width: 9px;
+  height: 9px;
+  border-radius: 1px 1px 5px 5px;
+  background: repeating-linear-gradient(90deg, #b83a2e 0 1px, #7e1c17 1px 2px);
+}
+
+@keyframes farmaish-tassel {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(9deg); }
+  40% { transform: rotate(-6deg); }
+  55% { transform: rotate(3deg); }
+  70% { transform: rotate(0deg); }
+}
+
+/* The words, written on the cloth. */
+.farmaish-words {
+  position: absolute;
+  color: #24170d;
+  opacity: 0;
+  transition: opacity 420ms var(--ease);
+}
+
+.farmaish-words--shown { opacity: 1; }
+
+.farmaish-words-urdu {
+  font-family: var(--font-urdu);
+  font-size: 1rem;
+  line-height: 1.8;
+  color: #8a3a1e;
+  margin: 0;
+  text-align: center;
+}
+
+.farmaish-words-title {
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.1;
+  color: #22150b;
+  margin: 0 0 4px;
+  text-align: center;
+}
+
+.farmaish-words-lede {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #6b4e33;
+  margin: 0 0 16px;
+  text-align: center;
+}
+
+.farmaish-words-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.farmaish-words-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.08rem;
+  color: #22150b;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(90, 60, 30, 0.45);
+  padding: 4px 2px;
+}
+
+.farmaish-words-input::placeholder { color: rgba(90, 60, 30, 0.5); }
+
+.farmaish-words-input:focus-visible {
+  outline: none;
+  border-bottom-color: #7a3b1c;
+  box-shadow: 0 1px 0 #7a3b1c;
+}
+
+.farmaish-words-send {
+  font-family: var(--font-serif);
+  font-size: 0.98rem;
+  color: #f6ecd9;
+  background: linear-gradient(180deg, #8a4526, #6a2f17);
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 16px;
+  min-height: 36px;
+  cursor: pointer;
+}
+
+.farmaish-words-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.farmaish-words-send:focus-visible { outline: 2px solid #7a3b1c; outline-offset: 2px; }
+
+.farmaish-words-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 16px 0 0;
+}
+
+.farmaish-words-chip {
+  font-family: var(--font-serif);
+  font-size: 0.88rem;
+  color: #5a3a22;
+  background: rgba(122, 59, 28, 0.06);
+  border: 1px solid rgba(122, 59, 28, 0.28);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.farmaish-words-chip:hover { background: rgba(122, 59, 28, 0.12); }
+
+.farmaish-words-answer {
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 16px -6px 0;
+  padding: 0 6px;
+  border-top: 1px dashed rgba(90, 60, 30, 0.38);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 59, 28, 0.35) transparent;
+}
+
+.farmaish-words-kicker {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 0.9rem;
+  color: #7a5a37;
+  margin: 12px 0 2px;
+}
+
+.farmaish-words-list { list-style: none; margin: 0; padding: 0; }
+
+.farmaish-words-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 4px 4px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid rgba(90, 60, 30, 0.14);
+  border-radius: 2px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.farmaish-words-row:hover,
+.farmaish-words-row:focus-visible { background: rgba(122, 59, 28, 0.08); }
+.farmaish-words-row:focus-visible { outline: 1px solid #7a3b1c; }
+
+.farmaish-words-play {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin: 0 3px;
+  border-radius: 50%;
+  color: #f6ecd9;
+  background: #7a3b1c;
+}
+
+.farmaish-words-cover {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 2px;
+  object-fit: cover;
+  background: rgba(90, 60, 30, 0.15);
+}
+
+.farmaish-words-row-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: 1.25;
+  color: #22150b;
+}
+
+.farmaish-words-row-sub {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-serif);
+  font-size: 0.84rem;
+  line-height: 1.35;
+  color: #6b4e33;
+}
+
+.farmaish-words-row--waiting { cursor: default; }
+.farmaish-words-row--waiting:hover { background: none; }
+
+.farmaish-words-ink {
+  display: block;
+  height: 8px;
+  margin: 5px 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(90, 60, 30, 0.1), rgba(90, 60, 30, 0.24), rgba(90, 60, 30, 0.1));
+  background-size: 200% 100%;
+  animation: farmaish-shimmer 1.2s linear infinite;
+}
+
+.farmaish-words-ink--thin { height: 6px; opacity: 0.7; }
+
+@keyframes farmaish-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.farmaish-words-list--arrived > li { animation: farmaish-ink 420ms var(--ease) both; }
+
+@keyframes farmaish-ink {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.farmaish-words-none {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: #6b4e33;
+  margin: 4px 0;
+}
+
+.farmaish-words-close {
+  display: block;
+  margin: 16px auto 0;
+  padding: 0 0 1px;
+  background: none;
+  border: 0;
+  border-bottom: 1px dashed rgba(90, 60, 30, 0.5);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: #7a3b1c;
+  cursor: pointer;
+}
+
+@media (max-width: 860px) {
+  .farmaish-scroll { margin: 32px auto 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arrival,
+  .feelings,
+  .feelings-grid > li,
+  .farmaish-words-list--arrived > li,
+  .mehfil-room--arrived .mehfil-aside,
+  .mehfil-room--arrived .mehfil-study,
+  .mehfil-room--arrived .stage-hero { animation: none; }
+  .farmaish-scroll::before,
+  .farmaish-scroll-tassel,
+  .farmaish-words-ink { animation: none; }
+}

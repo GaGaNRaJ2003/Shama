@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { Check, Loader2, Music, Play, Plus, Search, Trash2 } from 'lucide-react'
+import { Check, Loader2, Music, Play, Plus, Search, Send, Trash2 } from 'lucide-react'
 import './App.css'
 import { useAmbience } from './audio/useAmbience'
 import AmbienceToggle from './components/aesthetic/AmbienceToggle'
 import { ShaderBackdrop } from './components/aesthetic/ShaderBackdrop'
-import { IntroSequence, prefersReducedMotion, shouldPlayIntro } from './components/aesthetic/IntroSequence'
+import dynamic from 'next/dynamic'
+import { prefersReducedMotion, shouldPlayIntro } from './components/aesthetic/introGate'
+import { ArrivalStage, FeelingsGrid, arrivalEnabled } from './components/arrival/ArrivalStage'
 import { YouTubePlayer } from './components/YouTubePlayer'
 import ListeningStage from './components/listening/ListeningStage'
-import MehfilJamBar, { JamJoinPrompt } from './components/listening/MehfilJamBar'
+import MehfilJamBar, { GuestWaiting, HostQueue, JamJoinPrompt, RequestsInbox } from './components/listening/MehfilJamBar'
 import MehfilQueue from './components/listening/MehfilQueue'
 import MeaningPanel, { type StudyTab } from './components/listening/MeaningPanel'
 import RecordingSheet, { type Couplet, type SyncedLine } from './components/listening/RecordingSheet'
@@ -29,7 +31,7 @@ import {
   isInCatalog,
   type UserCatalogEntry,
 } from './data/userCatalog'
-import { useMehfilJam, DRIFT_TOLERANCE_MS, HEARTBEAT_MS } from './data/useMehfilJam'
+import { useMehfilJam, DRIFT_TOLERANCE_MS, HEARTBEAT_MS, type JamRequest, type SongWish } from './data/useMehfilJam'
 import {
   makeMehfilItem,
   moveItem,
@@ -40,6 +42,19 @@ import {
 } from './data/mehfil'
 
 const API_BASE = 'http://localhost:5000'
+
+// The opening (three.js) loads only when it plays; the dark stands in meanwhile.
+const IntroSequence = dynamic(() => import('./components/aesthetic/IntroSequence').then((m) => m.IntroSequence), {
+  ssr: false,
+  loading: () => <div className="intro" />,
+})
+
+/** A seek takes a moment to start sounding; aim at least that much ahead. */
+const SEEK_LEAD_S = 0.3
+/** The most a guest aims ahead, however slow its seeks have been. */
+const SEEK_LEAD_MAX_S = 4
+/** A seek still silent after this long is given up on and tried again. */
+const SEEK_STALL_MS = 8000
 
 /** Nothing technical reaches the user (§17); the detail goes to the console. */
 const COPY = {
@@ -62,6 +77,18 @@ interface YtTrack {
   thumbnail?: string
   coverUrl?: string
 }
+
+/** A search result from the recordings bridge. */
+const toYtTrack = (r: any): YtTrack => ({
+  videoId: r.videoId,
+  title: r.title,
+  artist: r.artist || (r.artists ? r.artists.join(', ') : 'Unknown Artist'),
+  album: r.album,
+  duration: r.duration,
+  durationSeconds: r.durationSeconds,
+  thumbnail: r.thumbnail,
+  coverUrl: r.thumbnail ? `${API_BASE}/api/yt/thumb?u=${encodeURIComponent(r.thumbnail)}` : undefined,
+})
 
 type View = 'LISTEN' | 'LIBRARY' | 'EXPLORE'
 
@@ -131,6 +158,10 @@ export function App() {
 
   const [currentView, setCurrentView] = useState<View>('LISTEN')
   const [quiet, setQuiet] = useState<boolean>(false)
+  // Until something is chosen the room opens on the arrival (an invitation to
+  // send a farmaish) rather than on a ghazal nobody picked.
+  const [arrivalOn] = useState(arrivalEnabled)
+  const [hasChosen, setHasChosen] = useState(false)
   const [searchTerm, setSearchTerm] = useState<string>('')
   const [moodFilter, setMoodFilter] = useState<string | null>(null)
   // Measured completeness per ghazal, filled in as recordings are prepared.
@@ -217,6 +248,87 @@ export function App() {
   // Mehfil Jam — listening together over a shared link.
   const jam = useMehfilJam(API_BASE)
   const isGuest = jam.role === 'guest'
+  // Arriving by a shared link makes this browser a guest from the first frame,
+  // before the room has answered, so no home screen or stray ghazal flashes by.
+  const [viaLink, setViaLink] = useState(
+    () => typeof window !== 'undefined' && !!new URLSearchParams(window.location.search).get('mehfil')
+  )
+  const guestMode = isGuest || (viaLink && jam.role === null && !jam.notice)
+  // A guest comes in through the join card; its tap is what lets sound play.
+  const [guestEntered, setGuestEntered] = useState(false)
+  const joinPending = guestMode && !guestEntered
+  // A guest hears the host once they are in and the opening has finished.
+  const guestMayPlay = !joinPending && intro === null
+  // Nothing from the host yet: the stage says so rather than showing a ghazal.
+  const guestWaiting = guestMode && !(jam.remote?.videoId && ytTrack?.videoId === jam.remote.videoId)
+  const awaitingChoice = arrivalOn && !hasChosen && !guestMode
+  // Host: publish now rather than at the next heartbeat (a seek), at a known position.
+  const publishNowRef = useRef<(positionSeconds?: number) => void>(() => {})
+  // A short word at the foot of the room: a request sent, answered, or arrived.
+  const [roomNote, setRoomNote] = useState<string | null>(null)
+  const roomNoteTimer = useRef<number | null>(null)
+  const showNote = (text: string) => {
+    setRoomNote(text)
+    if (roomNoteTimer.current) window.clearTimeout(roomNoteTimer.current)
+    roomNoteTimer.current = window.setTimeout(() => setRoomNote(null), 4000)
+  }
+
+  // A guest can't play anything; choosing something asks the host for it instead.
+  const requestFor = (wish: SongWish) =>
+    jam.requests.find(
+      (r) =>
+        r.from === jam.selfId &&
+        r.kind === wish.kind &&
+        (wish.kind === 'work' ? r.workId === wish.workId : r.videoId === wish.videoId)
+    )
+  const askHost = (wish: SongWish) => {
+    if (!isGuest || !jam.connected) return showNote('Still joining the mehfil. Try again in a moment.')
+    const earlier = requestFor(wish)
+    if (earlier?.status === 'pending') return showNote(`You’ve already asked for ${wish.title}.`)
+    if (earlier?.status === 'added') return showNote(`${wish.title} is already in the queue.`)
+    const waiting = jam.requests.filter((r) => r.from === jam.selfId && r.status === 'pending').length
+    if (waiting >= 5) return showNote('You have five requests waiting. Let the host answer those first.')
+    jam.requestSong(wish)
+    showNote(`Asked the host for ${wish.title}.`)
+  }
+  const workWish = (work: { id: string; title: string; artist: string }): SongWish => ({
+    kind: 'work',
+    workId: work.id,
+    title: work.title,
+    artist: work.artist,
+  })
+  const recordingWish = (track: { videoId: string; title: string; artist: string }): SongWish => ({
+    kind: 'recording',
+    videoId: track.videoId,
+    title: track.title,
+    artist: track.artist,
+  })
+  const askedLabel = (status?: JamRequest['status']) =>
+    status === 'pending' ? 'Asked' : status === 'added' ? 'In the queue' : status === 'declined' ? 'Not tonight' : 'Ask the host'
+  /** What became of this guest's request for something, if they made one. */
+  const askedStatus = (wish: SongWish) => (guestMode ? requestFor(wish)?.status : undefined)
+
+  // Leaving: a guest goes back to a room of their own, as if they had come in fresh.
+  const leaveMehfil = () => {
+    const wasGuest = guestMode
+    jam.leave()
+    if (!wasGuest) return
+    forgetMehfilLink()
+    setGuestEntered(false)
+    setIsPlaying(false)
+    setYtTrack(null)
+    setYtVideoId(null)
+    setHasChosen(false)
+    setCurrentView('LISTEN')
+  }
+  const forgetMehfilLink = () => {
+    setViaLink(false)
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('mehfil')) {
+      url.searchParams.delete('mehfil')
+      window.history.replaceState(null, '', url.toString())
+    }
+  }
 
   // `isRecording` == showing a searched recording rather than a curated ghazal.
   const isRecording = !!ytTrack
@@ -226,7 +338,7 @@ export function App() {
   // while a guest's join prompt is saying the browser can't play sound yet.
   // The tanpura waits for the opening to finish, then swells in.
   const ambience = useAmbience(
-    isPlaying || isSpeaking || resolving || (isGuest && jam.needsGesture) || intro !== null
+    isPlaying || isSpeaking || resolving || joinPending || intro !== null
   )
 
   // Meaning from the ML engine
@@ -237,6 +349,15 @@ export function App() {
   // A sung line the catalogue has no couplet for, which the listener asked
   // about. The meaning engine works on any text, so nothing has to be missing.
   const [adhocLine, setAdhocLine] = useState<string | null>(null)
+  // A recording with no words at all: there is no line to tap, so the meaning
+  // panel has nothing to offer and stays out of the way.
+  const recordingHasNoWords =
+    isRecording &&
+    !ytLyrics.loading &&
+    !ytLyrics.text &&
+    ytSyncedLines.length === 0 &&
+    ytCouplets.length === 0 &&
+    !adhocLine
 
   const [follow, setFollow] = useState<boolean>(true)
   // Mukarrar — hold on the couplet being sung and hear it again. The single
@@ -364,6 +485,34 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTime, activeWork, autoTimings, isRecording, occurrences, currentOccurrence])
 
+  // The mehfil a guest was in has ended: back to a room of their own.
+  useEffect(() => {
+    if (!jam.notice || !viaLink) return
+    forgetMehfilLink()
+    setGuestEntered(false)
+    setIsPlaying(false)
+    setYtTrack(null)
+    setYtVideoId(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jam.notice])
+
+  // Requests: the host hears of new ones; a guest hears what became of theirs.
+  const seenRequestsRef = useRef<Map<string, string>>(new Map())
+  useEffect(() => {
+    const seen = seenRequestsRef.current
+    for (const r of jam.requests) {
+      const before = seen.get(r.id)
+      seen.set(r.id, r.status)
+      if (before === r.status) continue
+      if (jam.role === 'host' && !before && r.status === 'pending') {
+        showNote(`${r.fromName} asks for ${r.title}.`)
+      } else if (jam.role === 'guest' && r.from === jam.selfId && before === 'pending') {
+        showNote(r.status === 'added' ? `The host added ${r.title} to the queue.` : `The host passed on ${r.title} tonight.`)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jam.requests])
+
   // A shared link (?mehfil=TOKEN) drops you straight into someone's mehfil.
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -387,6 +536,8 @@ export function App() {
         durationSeconds: remote.durationSeconds || undefined,
       })
       resetProgress()
+      // A new recording: nothing learned about the last one's seek applies.
+      Object.assign(alignStateRef.current, { waitingToMove: false, lastT: -1 })
       setYtVideoId(remote.videoId)
       resolvedWorkRef.current = null
       setSelectedYtLine(null)
@@ -401,47 +552,105 @@ export function App() {
         durationSeconds: remote.durationSeconds || undefined,
       })
     }
-    if (!jam.needsGesture) setIsPlaying(!remote.paused)
+    // Coming in (or out of the opening) to a recording already under way: start
+    // it where the host is, before it plays from the top.
+    const alreadyHeard = progressVideoRef.current === remote.videoId
+    const expectedNow = jam.expectedPositionMs()
+    const align = alignStateRef.current
+    if (
+      guestMayPlay &&
+      jam.remotePlaying() &&
+      !alreadyHeard &&
+      !align.waitingToMove &&
+      expectedNow !== null &&
+      expectedNow > DRIFT_TOLERANCE_MS
+    ) {
+      const target = expectedNow / 1000 + align.lead
+      Object.assign(align, { seekAt: Date.now(), seekTarget: target, waitingToMove: true, lastT: -1 })
+      setYtSeek(target)
+    }
+    setIsPlaying(guestMayPlay && !remote.paused)
+    // Every word from the host is a chance to check we're still with them.
+    alignRef.current()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGuest, jam.remote?.videoId, jam.remote?.paused, jam.remote?.updatedAt, jam.needsGesture])
+  }, [isGuest, jam.remote?.videoId, jam.remote?.paused, jam.remote?.updatedAt, guestMayPlay])
 
   // Guest: nudge back into line only when we have genuinely drifted. Seeking on
-  // every tick would stutter; ignoring drift lets the room fall apart.
+  // every tick would stutter; ignoring drift lets the room fall apart. The check
+  // keeps its own steady clock: tied to the host's heartbeat, it was reset every
+  // two seconds, just before it could run, and never corrected anything.
+  //
+  // A seek isn't heard at once: the player buffers first, for a moment on a good
+  // connection and seconds on a slow one. So it only judges drift while its own
+  // clock is moving, never re-seeks a seek still loading, and learns how long
+  // seeks take here, aiming that far ahead so they land in step.
+  const alignStateRef = useRef({ lastT: -1, seekAt: 0, seekTarget: 0, lead: SEEK_LEAD_S, waitingToMove: false })
+  const alignRef = useRef<() => void>(() => {})
+  alignRef.current = () => {
+    if (!isGuest || !guestMayPlay || !jam.remotePlaying()) return
+    // Our player must be reporting on the host's recording before its clock counts.
+    if (!ytVideoIdRef.current || progressVideoRef.current !== ytVideoIdRef.current) return
+    const st = alignStateRef.current
+    const now = Date.now()
+    const t = currentTimeRef.current
+    const moving = st.lastT >= 0 && t !== st.lastT
+    st.lastT = t
+    if (st.waitingToMove) {
+      if (!moving) {
+        if (now - st.seekAt < SEEK_STALL_MS) return
+      } else {
+        // Heard at last: how long did the seek sit silent?
+        const silent = (now - st.seekAt) / 1000 - Math.max(0, t - st.seekTarget)
+        st.lead = Math.min(SEEK_LEAD_MAX_S, Math.max(SEEK_LEAD_S, 0.5 * st.lead + 0.5 * silent))
+        st.waitingToMove = false
+        return
+      }
+    } else if (!moving) {
+      return
+    }
+    const expected = jam.expectedPositionMs()
+    if (expected === null) return
+    if (Math.abs(expected - t * 1000) > DRIFT_TOLERANCE_MS) {
+      const target = expected / 1000 + st.lead
+      Object.assign(st, { seekAt: now, seekTarget: target, waitingToMove: true, lastT: -1 })
+      seekTo(target)
+    }
+  }
   useEffect(() => {
-    if (!isGuest || jam.needsGesture || !jam.remote || jam.remote.paused) return
-    const id = setInterval(() => {
-      const expected = jam.expectedPositionMs()
-      if (expected === null) return
-      const drift = Math.abs(expected - currentTimeRef.current * 1000)
-      if (drift > DRIFT_TOLERANCE_MS) seekTo(expected / 1000)
-    }, 2000)
+    if (!isGuest || !guestMayPlay) return
+    const id = setInterval(() => alignRef.current(), 1000)
     return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGuest, jam.needsGesture, jam.remote?.paused, jam.remote?.updatedAt])
+  }, [isGuest, guestMayPlay])
 
   // Host: broadcast the transport on every change plus a slow heartbeat, so a
   // guest who joins mid-ghazal lands in the right place.
   useEffect(() => {
     if (jam.role !== 'host') return
-    const send = () => {
+    const send = (positionSeconds?: number) => {
       // Until the new video reports, the clock still belongs to the last one;
       // guests would seek to its position and match lyrics to its duration.
       const fresh = progressVideoRef.current === ytVideoId
+      const at = positionSeconds ?? (fresh ? currentTimeRef.current : 0)
       jam.publish({
         videoId: ytVideoId,
-        positionMs: fresh ? Math.round(currentTimeRef.current * 1000) : 0,
+        positionMs: Math.round(at * 1000),
         paused: !isPlaying,
         title: nowTitleRef.current,
         artist: nowArtistRef.current,
         durationSeconds: fresh ? Math.round(durationRef.current) : 0,
         queue: mehfil.map((m) => ({ title: m.title, artist: m.artist })),
+        queueIndex: currentMehfilId ? mehfil.findIndex((m) => m.id === currentMehfilId) : -1,
       })
     }
+    publishNowRef.current = send
     send()
-    const id = setInterval(send, HEARTBEAT_MS)
-    return () => clearInterval(id)
+    const id = setInterval(() => send(), HEARTBEAT_MS)
+    return () => {
+      clearInterval(id)
+      publishNowRef.current = () => {}
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jam.role, jam.connected, ytVideoId, isPlaying, mehfil])
+  }, [jam.role, jam.connected, ytVideoId, isPlaying, mehfil, currentMehfilId])
 
   // Fetch list of works on mount
   useEffect(() => {
@@ -601,7 +810,10 @@ export function App() {
 
   // Seeks the listener asks for. A jam guest's playhead belongs to the host.
   const userSeek = (sec: number) => {
-    if (!isGuest) seekTo(sec)
+    if (isGuest) return
+    seekTo(sec)
+    // Guests follow a jump at once, not at the next heartbeat.
+    if (jam.role === 'host') publishNowRef.current(sec)
   }
 
   // Resolve a YouTube recording for a curated work (cached per work id).
@@ -733,6 +945,8 @@ export function App() {
   }
 
   const openWork = async (work: any, play = false, alreadyQueued = false) => {
+    if (guestMode) return askHost(workWish(work))
+    setHasChosen(true)
     // A new choice supersedes any recording still being looked up.
     resolveTokenRef.current++
     setResolving(false)
@@ -892,6 +1106,14 @@ export function App() {
   }
 
   // ---- Recordings ----------------------------------------------------------
+  /** Recordings for the arrival request slip; the Explore page keeps its own state. */
+  const searchRecordings = useCallback(async (q: string, signal: AbortSignal) => {
+    const res = await fetch(`${API_BASE}/api/yt/search?q=${encodeURIComponent(q)}&limit=6`, { signal })
+    if (!res.ok) throw new Error(`recordings search: ${res.status}`)
+    const data = await res.json()
+    return (data.results || []).map(toYtTrack) as YtTrack[]
+  }, [])
+
   const runSearch = (e?: React.FormEvent, term?: string) => {
     if (e) e.preventDefault()
     const q = (term ?? ytQuery).trim()
@@ -910,18 +1132,7 @@ export function App() {
           setYtLoading(false)
           return
         }
-        const results: YtTrack[] = (data.results || []).map((r: any) => ({
-          videoId: r.videoId,
-          title: r.title,
-          artist: r.artist || (r.artists ? r.artists.join(', ') : 'Unknown Artist'),
-          album: r.album,
-          duration: r.duration,
-          durationSeconds: r.durationSeconds,
-          thumbnail: r.thumbnail,
-          coverUrl: r.thumbnail
-            ? `${API_BASE}/api/yt/thumb?u=${encodeURIComponent(r.thumbnail)}`
-            : undefined,
-        }))
+        const results: YtTrack[] = (data.results || []).map(toYtTrack)
         setYtResults(results)
         if (results.length === 0) {
           if (data.error) console.warn('[shama] search returned an error:', data.error)
@@ -1117,11 +1328,39 @@ export function App() {
    * The + on a search result: the recording waits in tonight's mehfil and playback
    * is untouched. A jam guest may add too; like reordering, that plays nothing.
    */
+  /** Host: a guest's request, added to tonight's mehfil. */
+  const acceptRequest = (request: JamRequest) => {
+    if (request.kind === 'work') {
+      const work = worksList.find((w) => w.id === request.workId) || catalog.find((w) => w.id === request.workId)
+      addToMehfil({
+        kind: 'work',
+        workId: request.workId,
+        title: work?.title || request.title,
+        artist: work?.artist || request.artist,
+        poet: work?.poet,
+        thumbnail: work?.coverUrl,
+      })
+    } else if (request.videoId) {
+      addToMehfil({
+        kind: 'recording',
+        videoId: request.videoId,
+        title: request.title,
+        artist: request.artist,
+        thumbnail: `${API_BASE}/api/yt/thumb?u=${encodeURIComponent(`https://i.ytimg.com/vi/${request.videoId}/mqdefault.jpg`)}`,
+      })
+    }
+    jam.resolveRequest(request.id, true)
+    showNote(`Added ${request.title} to tonight’s mehfil.`)
+  }
+
   const queueRecording = (track: YtTrack) => {
+    if (guestMode) return askHost(recordingWish(track))
     if (addToMehfil(recordingEntry(track))) setMehfilNotice(`Added ${track.title} to tonight’s mehfil.`)
   }
 
   const playRecording = (track: YtTrack) => {
+    if (guestMode) return askHost(recordingWish(track))
+    setHasChosen(true)
     // A new choice supersedes any curated recording still being looked up.
     resolveTokenRef.current++
     setResolving(false)
@@ -1468,7 +1707,7 @@ export function App() {
       <div className="noise-overlay" />
       <ShaderBackdrop />
 
-      {intro && (
+      {intro && !joinPending && (
         <IntroSequence
           key={intro.run}
           calm={intro.calm}
@@ -1538,7 +1777,20 @@ export function App() {
         }}
       />
 
-      <JamJoinPrompt jam={jam} />
+      <JamJoinPrompt
+        jam={jam}
+        open={joinPending}
+        onEnter={() => {
+          jam.acknowledgeGesture()
+          setGuestEntered(true)
+        }}
+      />
+
+      {roomNote && (
+        <p className="room-toast" role="status">
+          {roomNote}
+        </p>
+      )}
 
       {/* Out of reach while the opening plays; it rises out of the opening's light. */}
       <div
@@ -1581,14 +1833,31 @@ export function App() {
 
           <div className="room-actions">
             <AmbienceToggle ambience={ambience} />
-            <MehfilJamBar jam={jam} />
+            <MehfilJamBar
+              jam={jam}
+              onLeave={leaveMehfil}
+              onShowRequests={() => {
+                setCurrentView('LISTEN')
+                window.setTimeout(() => document.getElementById('mehfil-requests')?.focus(), 80)
+              }}
+            />
           </div>
         </header>
 
         {/* ------------------------------------------------------- LISTEN -- */}
         {currentView === 'LISTEN' && (
-          <div className={`mehfil-room ${quiet ? 'mehfil-room--quiet' : ''}`}>
+          <div
+            className={`mehfil-room ${quiet ? 'mehfil-room--quiet' : ''} ${
+              (awaitingChoice && mehfil.length === 0) || (guestWaiting && !jam.remote?.queue?.length)
+                ? 'mehfil-room--bare'
+                : ''
+            } ${arrivalOn && hasChosen ? 'mehfil-room--arrived' : ''}`}
+          >
             <aside className="mehfil-aside">
+              {jam.role === 'host' && <RequestsInbox jam={jam} onAdd={acceptRequest} />}
+              {guestMode ? (
+                <HostQueue jam={jam} />
+              ) : (
               <MehfilQueue
                 items={mehfil}
                 currentIndex={mehfilIndex}
@@ -1596,9 +1865,11 @@ export function App() {
                 onRemove={removeFromMehfil}
                 onMove={reorderMehfil}
                 onPlayNext={playNextInMehfil}
-                onBrowse={() => setCurrentView('LIBRARY')}
+                onOpenLibrary={() => setCurrentView('LIBRARY')}
+                onOpenExplore={() => setCurrentView('EXPLORE')}
                 readOnly={isGuest}
               />
+              )}
             </aside>
 
             <div className="mehfil-stage">
@@ -1658,10 +1929,29 @@ export function App() {
                 }
                 onExplorePoet={isRecording ? undefined : exploreSubject}
                 onExploreSinger={exploreSubject}
+                arrival={
+                  awaitingChoice ? (
+                    <ArrivalStage
+                      works={catalog}
+                      onChooseWork={(work) => void openWork(work, true)}
+                      onPlayRecording={(hit) => playRecording(hit as YtTrack)}
+                      searchRecordings={searchRecordings}
+                    />
+                  ) : guestWaiting ? (
+                    <GuestWaiting jam={jam} />
+                  ) : undefined
+                }
               />
+              {awaitingChoice && <FeelingsGrid works={catalog} onChooseWork={(work) => void openWork(work, true)} />}
             </div>
 
-            <div className="mehfil-study">
+            <div
+              className={`mehfil-study ${recordingHasNoWords ? 'mehfil-study--single' : ''}`}
+              // With no words and no other performance to point to, the title already says it all.
+              hidden={
+                awaitingChoice || guestWaiting || (recordingHasNoWords && ytLyrics.otherRenditions.length === 0)
+              }
+            >
               {isRecording ? (
                 <RecordingSheet
                   loading={ytLyrics.loading}
@@ -1713,55 +2003,57 @@ export function App() {
                 />
               )}
 
-              <MeaningPanel
-                tab={studyTab}
-                onTab={setStudyTab}
-                couplet={
-                  isRecording
-                    ? adhocLine
+              {!recordingHasNoWords && (
+                <MeaningPanel
+                  tab={studyTab}
+                  onTab={setStudyTab}
+                  couplet={
+                    isRecording
+                      ? adhocLine
+                        ? { roman: adhocLine }
+                        : selectedYtLine
+                        ? { roman: selectedYtLine.combined_text }
+                        : null
+                      : adhocLine
                       ? { roman: adhocLine }
-                      : selectedYtLine
-                      ? { roman: selectedYtLine.combined_text }
-                      : null
-                    : adhocLine
-                    ? { roman: adhocLine }
-                    : {
-                        urdu: activeLine.urdu,
-                        roman: activeLine.transliteration || activeLine.roman,
-                        translation: activeLine.translation,
-                      }
-                }
-                meaning={isRecording ? ytMeaning : aiMeaning}
-                loading={isRecording ? ytMeaningLoading : aiLoading}
-                failed={isRecording ? ytMeaningFailed : aiFailed}
-                onRetry={() => setMeaningNonce((n) => n + 1)}
-                fallback={
-                  isRecording || adhocLine
-                    ? undefined
-                    : {
-                        simple: activeLine.simple,
-                        detailed: activeLine.detailed,
-                        vocabulary: activeLine.vocabulary,
-                      }
-                }
-                facts={{
-                  title: nowTitle,
-                  poet: isRecording ? undefined : activeWork.poet,
-                  singer: nowArtist,
-                  form: isRecording ? undefined : activeWork.form,
-                  mood: isRecording ? ytMeaning?.mood : activeWork.mood || aiMeaning?.mood,
-                }}
-                onExplorePoet={isRecording ? undefined : exploreSubject}
-                onExploreSinger={exploreSubject}
-                onPronounce={pronounce}
-                isSpeaking={isSpeaking}
-                onToggleNarration={toggleNarration}
-                emptyPrompt={
-                  isRecording
-                    ? 'Tap any line of the poetry to read what it means.'
-                    : 'Choose a couplet to sit with it a while.'
-                }
-              />
+                      : {
+                          urdu: activeLine.urdu,
+                          roman: activeLine.transliteration || activeLine.roman,
+                          translation: activeLine.translation,
+                        }
+                  }
+                  meaning={isRecording ? ytMeaning : aiMeaning}
+                  loading={isRecording ? ytMeaningLoading : aiLoading}
+                  failed={isRecording ? ytMeaningFailed : aiFailed}
+                  onRetry={() => setMeaningNonce((n) => n + 1)}
+                  fallback={
+                    isRecording || adhocLine
+                      ? undefined
+                      : {
+                          simple: activeLine.simple,
+                          detailed: activeLine.detailed,
+                          vocabulary: activeLine.vocabulary,
+                        }
+                  }
+                  facts={{
+                    title: nowTitle,
+                    poet: isRecording ? undefined : activeWork.poet,
+                    singer: nowArtist,
+                    form: isRecording ? undefined : activeWork.form,
+                    mood: isRecording ? ytMeaning?.mood : activeWork.mood || aiMeaning?.mood,
+                  }}
+                  onExplorePoet={isRecording ? undefined : exploreSubject}
+                  onExploreSinger={exploreSubject}
+                  onPronounce={pronounce}
+                  isSpeaking={isSpeaking}
+                  onToggleNarration={toggleNarration}
+                  emptyPrompt={
+                    isRecording
+                      ? 'Tap any line of the poetry to read what it means.'
+                      : 'Choose a couplet to sit with it a while.'
+                  }
+                />
+              )}
             </div>
           </div>
         )}
@@ -1774,7 +2066,9 @@ export function App() {
               <h2 className="page-title">Ghazals, read and heard</h2>
               <p className="page-lede">
                 Each of these carries its couplets, their meanings and the words worth knowing.
-                Choose one and it joins tonight&rsquo;s mehfil.
+                {guestMode
+                  ? ' You’re a guest in this mehfil: choose one to ask the host to add it.'
+                  : ' Choose one and it joins tonight’s mehfil.'}
               </p>
             </div>
 
@@ -1826,8 +2120,12 @@ export function App() {
                       type="button"
                       className="work-row-main"
                       onClick={() => void openWork(work, true)}
-                      aria-label={`Listen to ${work.title}, ${work.poet}, sung by ${work.artist}`}
-                      title="Listen now — it joins tonight’s mehfil"
+                      aria-label={
+                        guestMode
+                          ? `Ask the host to add ${work.title}, ${work.poet}, sung by ${work.artist}`
+                          : `Listen to ${work.title}, ${work.poet}, sung by ${work.artist}`
+                      }
+                      title={guestMode ? 'Ask the host to add it' : 'Listen now — it joins tonight’s mehfil'}
                     >
                       <span className="sher-index">{String(i + 1).padStart(2, '0')}</span>
                       <span>
@@ -1837,6 +2135,11 @@ export function App() {
                         </span>
                         <span className="work-meta-row">
                           {work.mood && <span className="work-mood">{work.mood}</span>}
+                          {guestMode && (
+                            <span className={`work-ask work-ask--${askedStatus(workWish(work)) ?? 'none'}`}>
+                              {askedLabel(askedStatus(workWish(work)))}
+                            </span>
+                          )}
                           {readiness[work.id] && (
                             <span
                               className={`work-ready work-ready--${
@@ -1854,17 +2157,6 @@ export function App() {
                         </span>
                       </span>
                     </button>
-                    <span className="work-actions">
-                      <button
-                        type="button"
-                        className="text-btn"
-                        onClick={() => void openWork(work, false)}
-                        aria-label={`Read ${work.title} without playing`}
-                        title="Open the couplets without playing"
-                      >
-                        Read
-                      </button>
-                    </span>
                   </li>
                 ))}
               </ul>
@@ -1936,6 +2228,7 @@ export function App() {
               <p className="page-lede">
                 Search for a ghazal, a poet or a singer. The same poetry has been sung many times
                 over — hearing two renditions beside each other is half the pleasure.
+                {guestMode && ' You’re a guest in this mehfil: choose a recording to ask the host to add it.'}
               </p>
             </div>
 
@@ -1984,7 +2277,8 @@ export function App() {
             {!ytLoading && ytResults.length > 0 && (
               <div className="result-grid">
                 {ytResults.map((track, idx) => {
-                  const queued = isRecordingQueued(track.videoId)
+                  const asked = askedStatus(recordingWish(track))
+                  const queued = guestMode ? asked === 'pending' || asked === 'added' : isRecordingQueued(track.videoId)
                   return (
                     <div
                       key={`${track.videoId}-${idx}`}
@@ -1998,6 +2292,7 @@ export function App() {
                         type="button"
                         className="result-card"
                         onClick={() => playRecording(track)}
+                        title={guestMode ? 'Ask the host to add it' : undefined}
                       >
                         <span className="result-art">
                           {track.coverUrl ? (
@@ -2006,7 +2301,7 @@ export function App() {
                             <Music size={20} aria-hidden="true" />
                           )}
                           <span className="result-art-veil">
-                            <Play size={20} aria-hidden="true" />
+                            {guestMode ? <Send size={18} aria-hidden="true" /> : <Play size={20} aria-hidden="true" />}
                           </span>
                         </span>
                         <span>
@@ -2022,11 +2317,23 @@ export function App() {
                         className={`result-add ${queued ? 'result-add--done' : ''}`}
                         aria-disabled={queued || undefined}
                         aria-label={
-                          queued
+                          guestMode
+                            ? queued
+                              ? `You’ve asked the host for ${track.title}`
+                              : `Ask the host to add ${track.title}`
+                            : queued
                             ? `${track.title} is in tonight’s mehfil`
                             : `Add ${track.title} to tonight’s mehfil`
                         }
-                        title={queued ? 'In tonight’s mehfil' : 'Add to tonight’s mehfil'}
+                        title={
+                          guestMode
+                            ? queued
+                              ? 'Asked'
+                              : 'Ask the host to add it'
+                            : queued
+                            ? 'In tonight’s mehfil'
+                            : 'Add to tonight’s mehfil'
+                        }
                         onClick={() => {
                           if (!queued) queueRecording(track)
                         }}

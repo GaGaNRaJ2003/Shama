@@ -169,7 +169,47 @@
   background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(0, 0, 0, 0.7) 100%);
 }
 
-.intro--scene .intro-stage { opacity: 1; }
+.intro--scene .intro-stage,
+.intro--waiting .intro-stage { opacity: 1; }
+
+/* When the browser holds sound, the opening waits on its ember for a tap:
+   the whole dark is the button, and the words sit low and quiet. */
+.intro-tap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 0 max(18vh, 96px);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  animation: intro-tap-in 900ms var(--ease) 400ms both;
+}
+
+.intro-tap-words {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+  letter-spacing: 0.02em;
+  color: rgba(243, 236, 226, 0.7);
+  transition: color var(--dur) var(--ease);
+}
+
+.intro-tap:hover .intro-tap-words { color: var(--color-flame); }
+
+.intro-tap:focus-visible { outline: none; }
+.intro-tap:focus-visible .intro-tap-words {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: rgba(230, 184, 117, 0.7);
+  text-underline-offset: 6px;
+}
+
+@keyframes intro-tap-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 
 /* The dive ends in a cut, not a fade. */
 .intro--burst .intro-stage,
@@ -370,7 +410,20 @@
 
 @media (max-width: 860px) { .stage-art { width: min(220px, 56vw); } }
 
-.stage-art-scene { position: absolute; inset: 0; }
+.stage-art-scene { position: absolute; inset: 0; opacity: 0; transition: opacity 600ms var(--ease); }
+
+/* A still of the scene holds the place until the scene's first frame. */
+.stage-art-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 600ms var(--ease);
+}
+
+.stage-art[data-ready] .stage-art-scene { opacity: 1; }
+.stage-art[data-ready] .stage-art-poster { opacity: 0; }
 
 .stage-art-cover {
   position: absolute;
@@ -1246,8 +1299,7 @@
 
 .work-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   border-bottom: 1px solid var(--color-border-soft);
 }
@@ -1299,8 +1351,6 @@
   display: block;
   margin-top: 4px;
 }
-
-.work-actions { display: flex; gap: var(--space-2); align-items: center; }
 
 /* Result cards (recordings from search / the saved collection) */
 .result-grid {
@@ -1688,14 +1738,378 @@
 }
 
 .jam-prompt-inner {
-  max-width: 34rem;
+  display: grid;
+  justify-items: center;
+  width: min(30rem, calc(100vw - 32px));
   padding: var(--space-6);
   text-align: center;
 }
 
-.jam-prompt-inner .icon-btn--primary {
-  margin: var(--space-5) auto 0;
-  font-size: 1.1rem;
+.jam-prompt-urdu {
+  font-family: var(--font-urdu);
+  font-size: 1.3rem;
+  line-height: 1.9;
+  color: var(--color-accent);
+  margin: 0;
+}
+
+.jam-prompt-title {
+  font-family: var(--font-serif);
+  font-size: clamp(1.8rem, 3vw, 2.3rem);
+  font-weight: 400;
+  line-height: 1.15;
+  color: var(--color-text-primary);
+  margin: 0 0 16px;
+}
+
+.jam-prompt-lede {
+  font-family: var(--font-serif);
+  font-size: 1.02rem;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  margin: 0 0 32px;
+}
+
+.jam-prompt-label {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.98rem;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+
+.jam-prompt-input {
+  width: min(18rem, 100%);
+  min-height: 44px;
+  padding: 6px 4px;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: 1.3rem;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.jam-prompt-input::placeholder { color: var(--color-text-faint); font-style: italic; }
+
+.jam-prompt-input:focus-visible {
+  outline: none;
+  border-bottom-color: var(--color-flame);
+  box-shadow: 0 1px 0 var(--color-flame);
+}
+
+.jam-prompt-enter {
+  margin-top: 32px;
+  min-height: 44px;
+  padding: 10px 26px;
+  font-family: var(--font-serif);
+  font-size: 1.08rem;
+  color: var(--color-bg-deep);
+  background: linear-gradient(180deg, var(--color-flame), var(--color-highlight));
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(242, 201, 138, 0.3), 0 10px 34px -10px rgba(242, 201, 138, 0.6);
+  transition: transform var(--dur-quick) var(--ease);
+}
+
+.jam-prompt-enter:hover { transform: translateY(-1px); }
+.jam-prompt-enter:focus-visible { outline: 2px solid var(--color-flame); outline-offset: 3px; }
+
+/* Who is in the mehfil: a count that opens into names. */
+.jam-members { position: relative; }
+
+.jam-members-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.jam-members-summary::-webkit-details-marker { display: none; }
+.jam-members-summary:hover { color: var(--color-flame); }
+.jam-members-summary:focus-visible { outline: 1px solid var(--color-flame); outline-offset: 3px; }
+
+.jam-members-panel {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: -12px;
+  z-index: 50;
+  width: 17rem;
+  padding: 16px;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  background: rgba(20, 17, 15, 0.97);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.9);
+}
+
+.jam-members-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.jam-members-list {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0 28px 0 0;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.jam-members-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  color: var(--color-text-primary);
+}
+
+.jam-member-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 0.85rem;
+  color: var(--color-bg-deep);
+  background: linear-gradient(180deg, var(--color-flame), var(--color-accent));
+}
+
+.jam-member-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.jam-member-tag {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.jam-rename {
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.jam-rename label {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+.jam-rename-row { display: flex; align-items: center; gap: 10px; }
+
+.jam-rename input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 2px;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.jam-rename input:focus-visible { outline: none; border-bottom-color: var(--color-flame); }
+
+/* The host's inbox: what the guests have asked for. */
+.requests {
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid rgba(242, 201, 138, 0.28);
+  border-radius: var(--radius-lg);
+  background: radial-gradient(circle at 0% 0%, rgba(242, 201, 138, 0.08), transparent 70%), var(--color-surface);
+}
+
+.requests:focus { outline: 1px solid var(--color-flame); outline-offset: 2px; }
+
+.requests-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-serif);
+  font-size: 1.12rem;
+  font-weight: 400;
+  color: var(--color-text-primary);
+}
+
+.requests-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--font-serif);
+  font-size: 0.8rem;
+  color: var(--color-bg-deep);
+  background: var(--color-flame);
+}
+
+.requests-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+
+.request {
+  display: grid;
+  gap: 1px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-soft);
+}
+
+.request:first-child { border-top: 0; padding-top: 0; }
+
+.request-who {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.88rem;
+  color: var(--color-text-muted);
+}
+
+.request-title {
+  font-family: var(--font-serif);
+  font-size: 1.02rem;
+  line-height: 1.25;
+  color: var(--color-text-primary);
+}
+
+.request-sub {
+  font-family: var(--font-serif);
+  font-size: 0.86rem;
+  color: var(--color-text-muted);
+}
+
+.request-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.request-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 4px 12px;
+  font-family: var(--font-serif);
+  font-size: 0.92rem;
+  color: var(--color-bg-deep);
+  background: linear-gradient(180deg, var(--color-flame), var(--color-highlight));
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.request-add:focus-visible { outline: 2px solid var(--color-flame); outline-offset: 2px; }
+
+.jam-requests-badge { color: var(--color-flame); }
+
+.jam-leave { color: var(--color-text-secondary); }
+
+/* A guest's own requests, and what became of them. */
+.my-requests { margin-top: var(--space-5); }
+
+.my-requests-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.95rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+.my-requests-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+
+.my-request { display: grid; gap: 2px; }
+.my-request .mehfil-item-title { display: block; }
+
+.my-request-status {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.86rem;
+  color: var(--color-text-muted);
+}
+
+.my-request--added .my-request-status { color: var(--color-highlight); }
+.my-request--declined { opacity: 0.6; }
+
+/* In the Library, a guest's way to ask. */
+.work-ask {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 0.88rem;
+  color: var(--color-text-muted);
+}
+
+.work-row-main:hover .work-ask--none { color: var(--color-flame); }
+.work-ask--pending,
+.work-ask--added { color: var(--color-highlight); }
+
+/* A guest's view of the host's queue: to follow, not to change. */
+.host-queue {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+}
+
+.host-queue-item {
+  display: grid;
+  grid-template-columns: 2.4em minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.host-queue-item .mehfil-item-title,
+.host-queue-item .mehfil-item-sub { display: block; }
+
+.host-queue-item--current .mehfil-item-title { color: var(--color-highlight); }
+
+.guest-waiting-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+/* A short word to a guest who tried to choose. */
+.room-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  margin: 0;
+  padding: 10px 18px;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  color: var(--color-text-primary);
+  background: rgba(20, 17, 15, 0.95);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  box-shadow: 0 14px 40px -12px rgba(0, 0, 0, 0.9);
+  animation: sher-in var(--dur) var(--ease);
 }
 
 /* ------------------------------------- choosing the right recording ------- */
@@ -1821,3 +2235,6 @@
   .mehfil-room:not(.mehfil-room--quiet) .hero-urdu,
   .mehfil-room:not(.mehfil-room--quiet) .stage-form { text-align: left; }
 }
+
+/* A recording with no words: the words panel takes the whole row. */
+.mehfil-study--single { grid-template-columns: minmax(0, 1fr); }

@@ -23,7 +23,35 @@ export interface JamState {
   durationSeconds: number
   updatedAt: number
   queue: { title: string; artist: string }[]
+  /** Which of `queue` is playing, or -1. */
+  queueIndex: number
 }
+
+/** Someone in the mehfil, by the nickname they gave. */
+export interface JamMember {
+  id: string
+  name: string
+  host: boolean
+}
+
+/** A guest's ask to add something to the host's queue. */
+export interface JamRequest {
+  id: string
+  from: string
+  fromName: string
+  kind: 'work' | 'recording'
+  workId?: string
+  videoId?: string
+  title: string
+  artist: string
+  status: 'pending' | 'added' | 'declined'
+  at: number
+}
+
+/** What a guest can ask for. */
+export type SongWish =
+  | { kind: 'work'; workId: string; title: string; artist: string }
+  | { kind: 'recording'; videoId: string; title: string; artist: string }
 
 export type JamRole = 'host' | 'guest' | null
 
@@ -31,10 +59,43 @@ export type JamRole = 'host' | 'guest' | null
 const DRIFT_TOLERANCE_MS = 1500
 const HEARTBEAT_MS = 2000
 
+const NAME_KEY = 'shama.nickname'
+
+/** Names a newcomer might go by, offered until they choose their own. */
+const SUGGESTED_NAMES = ['Bulbul', 'Parwana', 'Musafir', 'Raahi', 'Saqi', 'Deewana', 'Chakor', 'Mehmaan', 'Sukhan', 'Humnawa']
+
+export function suggestName(): string {
+  return SUGGESTED_NAMES[Math.floor(Math.random() * SUGGESTED_NAMES.length)]
+}
+
+function readName(): string {
+  try {
+    return localStorage.getItem(NAME_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
 export interface JamHandle {
   role: JamRole
   token: string | null
   listeners: number
+  /** Who is here, host first. */
+  members: JamMember[]
+  /** Which of `members` is this browser. */
+  selfId: string | null
+  /** What this browser is called here; empty until chosen. */
+  name: string
+  /** Choose or change the nickname; remembered, and told to the room. */
+  rename: (name: string) => void
+  /** Every request in the room, oldest first. */
+  requests: JamRequest[]
+  /** Guest: ask the host to add something. */
+  requestSong: (wish: SongWish) => void
+  /** Guest: take back a request still waiting. */
+  withdrawRequest: (id: string) => void
+  /** Host: add (true) or decline (false) a request. */
+  resolveRequest: (id: string, accept: boolean) => void
   connected: boolean
   /** Guest-only: false while the room has no host connected. */
   hostPresent: boolean
@@ -51,6 +112,8 @@ export interface JamHandle {
   acknowledgeGesture: () => void
   /** Where the host is right now, in ms, corrected for clock skew. */
   expectedPositionMs: () => number | null
+  /** Whether the host has a recording going right now. */
+  remotePlaying: () => boolean
   /** Said once we are out of a mehfil, e.g. that its link has expired. */
   notice: string | null
   dismissNotice: () => void
@@ -65,6 +128,12 @@ export function useMehfilJam(apiBase: string): JamHandle {
   const [needsGesture, setNeedsGesture] = useState(false)
   const [hostPresent, setHostPresent] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
+  const [members, setMembers] = useState<JamMember[]>([])
+  const [selfId, setSelfId] = useState<string | null>(null)
+  const [requests, setRequests] = useState<JamRequest[]>([])
+  const [name, setName] = useState<string>(readName)
+  const nameRef = useRef(name)
+  nameRef.current = name
 
   const wsRef = useRef<WebSocket | null>(null)
   const hostKeyRef = useRef<string | null>(null)
@@ -96,6 +165,7 @@ export function useMehfilJam(apiBase: string): JamHandle {
       const base = apiBase.replace(/^http/, 'ws')
       const q = new URLSearchParams({ token: tok })
       if (hostKey) q.set('hostKey', hostKey)
+      if (nameRef.current) q.set('name', nameRef.current)
       return `${base}/ws/mehfil?${q.toString()}`
     },
     [apiBase]
@@ -140,6 +210,9 @@ export function useMehfilJam(apiBase: string): JamHandle {
           setRole(msg.role)
           setToken(msg.token)
           setListeners(msg.listeners || 1)
+          if (Array.isArray(msg.members)) setMembers(msg.members)
+          if (typeof msg.you === 'string') setSelfId(msg.you)
+          if (Array.isArray(msg.requests)) setRequests(msg.requests)
           if (msg.role === 'guest') {
             remoteRef.current = msg.state
             setRemote(msg.state)
@@ -150,8 +223,11 @@ export function useMehfilJam(apiBase: string): JamHandle {
         } else if (msg.type === 'state') {
           remoteRef.current = msg.state
           setRemote(msg.state)
+        } else if (msg.type === 'requests') {
+          if (Array.isArray(msg.requests)) setRequests(msg.requests)
         } else if (msg.type === 'presence') {
           setListeners(msg.listeners || 0)
+          if (Array.isArray(msg.members)) setMembers(msg.members)
           if (typeof msg.hasHost === 'boolean') setHostPresent(msg.hasHost)
         }
       }
@@ -209,6 +285,9 @@ export function useMehfilJam(apiBase: string): JamHandle {
     remoteRef.current = null
     setRemote(null)
     setListeners(0)
+    setMembers([])
+    setSelfId(null)
+    setRequests([])
     setConnected(false)
     setNeedsGesture(false)
     setHostPresent(true)
@@ -243,6 +322,28 @@ export function useMehfilJam(apiBase: string): JamHandle {
     },
     [connect, roomExists, endMehfil]
   )
+
+  const rename = useCallback((next: string) => {
+    const clean = next.replace(/\s+/g, ' ').trim().slice(0, 24)
+    if (!clean) return
+    setName(clean)
+    nameRef.current = clean
+    try {
+      localStorage.setItem(NAME_KEY, clean)
+    } catch {
+      /* private mode: it lasts for this visit */
+    }
+    const socket = wsRef.current
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'name', name: clean }))
+  }, [])
+
+  const send = useCallback((payload: unknown) => {
+    const socket = wsRef.current
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload))
+  }, [])
+  const requestSong = useCallback((wish: SongWish) => send({ type: 'request', request: wish }), [send])
+  const withdrawRequest = useCallback((id: string) => send({ type: 'withdraw', id }), [send])
+  const resolveRequest = useCallback((id: string, accept: boolean) => send({ type: 'resolve', id, accept }), [send])
 
   const publish = useCallback((state: Omit<JamState, 'updatedAt'>) => {
     const socket = wsRef.current
@@ -280,6 +381,14 @@ export function useMehfilJam(apiBase: string): JamHandle {
     role,
     token,
     listeners,
+    members,
+    selfId,
+    name,
+    rename,
+    requests,
+    requestSong,
+    withdrawRequest,
+    resolveRequest,
     connected,
     hostPresent,
     remote,
@@ -303,6 +412,10 @@ export function useMehfilJam(apiBase: string): JamHandle {
       // Place the host's server-stamped position on our own timeline.
       const nowOnServerClock = Date.now() + clockSkewRef.current
       return state.positionMs + Math.max(0, nowOnServerClock - state.updatedAt)
+    },
+    remotePlaying: () => {
+      const state = remoteRef.current
+      return !!state && !!state.videoId && !state.paused
     },
     notice,
     dismissNotice: () => setNotice(null),

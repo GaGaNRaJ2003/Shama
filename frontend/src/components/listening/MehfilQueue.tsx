@@ -12,7 +12,8 @@ interface MehfilQueueProps {
   onRemove: (index: number) => void
   onMove: (from: number, to: number) => void
   onPlayNext: (index: number) => void
-  onBrowse: () => void
+  onOpenLibrary: () => void
+  onOpenExplore: () => void
   /** A jam guest: the host chooses what plays. Reordering and removing stay theirs. */
   readOnly?: boolean
 }
@@ -28,7 +29,8 @@ export function MehfilQueue({
   onRemove,
   onMove,
   onPlayNext,
-  onBrowse,
+  onOpenLibrary,
+  onOpenExplore,
   readOnly = false,
 }: MehfilQueueProps) {
   // While a row is dragged the list follows the pointer here; the mehfil itself
@@ -92,9 +94,7 @@ export function MehfilQueue({
       {items.length === 0 ? (
         <p className="state-note" style={{ marginTop: 'var(--space-4)' }}>
           Nothing is queued yet.{' '}
-          <button type="button" className="text-btn" onClick={onBrowse}>
-            Choose ghazals from the Library
-          </button>
+          <AddFrom lead="Add ghazals" onOpenLibrary={onOpenLibrary} onOpenExplore={onOpenExplore} />
         </p>
       ) : (
         <MotionConfig reducedMotion="user">
@@ -139,13 +139,36 @@ export function MehfilQueue({
       </p>
 
       {items.length > 0 && (
-        <p style={{ marginTop: 'var(--space-4)' }}>
-          <button type="button" className="text-btn" onClick={onBrowse}>
-            Add another ghazal
-          </button>
+        <p className="state-note" style={{ marginTop: 'var(--space-4)' }}>
+          <AddFrom lead="Add more" onOpenLibrary={onOpenLibrary} onOpenExplore={onOpenExplore} />
         </p>
       )}
     </section>
+  )
+}
+
+/** Ghazals join the mehfil from either room: the Library's curated works or any recording found in Explore. */
+function AddFrom({
+  lead,
+  onOpenLibrary,
+  onOpenExplore,
+}: {
+  lead: string
+  onOpenLibrary: () => void
+  onOpenExplore: () => void
+}) {
+  // One span, so the parent's flex gap doesn't pull the sentence apart.
+  return (
+    <span>
+      {lead} from the{' '}
+      <button type="button" className="text-btn" onClick={onOpenLibrary}>
+        Library
+      </button>{' '}
+      or{' '}
+      <button type="button" className="text-btn" onClick={onOpenExplore}>
+        Explore
+      </button>
+    </span>
   )
 }
 

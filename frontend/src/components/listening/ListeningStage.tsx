@@ -13,7 +13,9 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react'
-import { MehfilScene } from '../aesthetic/MehfilScene'
+import { useState, type ReactNode } from 'react'
+import dynamic from 'next/dynamic'
+import { motion } from 'framer-motion'
 import PoetryTimeline, { type TimelineMarker } from './PoetryTimeline'
 
 export interface HeroCouplet {
@@ -67,7 +69,16 @@ interface ListeningStageProps {
   onExploreSinger?: (singer: string) => void
   /** In a jam, guests follow the host: their transport doesn't drive playback. */
   readOnly?: boolean
+  /** Until the first choice, shown in place of the hero. */
+  arrival?: ReactNode
 }
+
+// The 3D scene (three.js) arrives in its own bundle, so the room needn't wait
+// for it; a still of the same scene stands in until its first frame.
+const MehfilScene = dynamic(() => import('../aesthetic/MehfilScene').then((m) => m.MehfilScene), { ssr: false })
+export const STAGE_POSTER = '/stage-poster.webp'
+
+const ART_SETTLE = { duration: 0.9, ease: [0.22, 0.61, 0.36, 1] as [number, number, number, number] }
 
 export function ListeningStage({
   formLabel,
@@ -108,245 +119,262 @@ export function ListeningStage({
   onExplorePoet,
   onExploreSinger,
   readOnly = false,
+  arrival,
 }: ListeningStageProps) {
+  const [sceneReady, setSceneReady] = useState(false)
   return (
-    <div className="stage">
-      <div className="stage-art">
+    <div className={`stage ${arrival ? 'stage--arrival' : ''}`}>
+      {/* The art is shown large on arrival and settles to its size at the first
+          choice; it keeps one element (and one canvas) throughout. */}
+      <motion.div
+        className="stage-art"
+        data-ready={sceneReady || undefined}
+        layout
+        transition={ART_SETTLE}
+        // The canvas measured itself mid-animation (through the transform); let it measure again.
+        onLayoutAnimationComplete={() => window.dispatchEvent(new Event('resize'))}
+      >
         {/* The candle and the turning record — the recurring SHAMA mark (§13). */}
+        <img className="stage-art-poster" src={STAGE_POSTER} alt="" aria-hidden="true" fetchPriority="high" />
         <div className="stage-art-scene">
           <MehfilScene
-            isPlaying={isPlaying}
-            coverUrl={coverUrl}
-            onTogglePlay={readOnly ? undefined : onTogglePlay}
+            isPlaying={arrival ? false : isPlaying}
+            coverUrl={arrival ? undefined : coverUrl}
+            onTogglePlay={readOnly || arrival ? undefined : onTogglePlay}
+            onReady={() => setSceneReady(true)}
           />
         </div>
         <div className="stage-art-glow" aria-hidden="true" />
-      </div>
+      </motion.div>
 
-      <div className="stage-hero">
-        {formLabel && (
-          <div className="stage-form" lang="ur" dir="rtl" aria-hidden="true">
-            {formLabel}
-          </div>
-        )}
-
-        <h1 className="stage-title">{title}</h1>
-
-        <div className="hero-sher">
-          {couplet && (couplet.urdu || couplet.roman) ? (
-            <div key={`${couplet.urdu || ''}${couplet.roman || ''}`}>
-              {couplet.urdu && (
-                <p className="hero-urdu" lang="ur" dir="rtl">
-                  {couplet.urdu}
-                </p>
-              )}
-              {couplet.roman && <p className="hero-roman">{couplet.roman}</p>}
-              {couplet.english && <p className="hero-english">{couplet.english}</p>}
+      {arrival ? (
+        <div className="stage-hero">{arrival}</div>
+      ) : (
+        <div className="stage-hero">
+          {formLabel && (
+            <div className="stage-form" lang="ur" dir="rtl" aria-hidden="true">
+              {formLabel}
             </div>
-          ) : coupletFallback ? (
-            <p className="hero-english">{coupletFallback}</p>
-          ) : null}
-        </div>
+          )}
 
-        {unknownLine && onExplainLine && (
-          <p className="unknown-line">
-            <button type="button" className="text-btn" onClick={() => onExplainLine(unknownLine)}>
-              What does this mean?
-            </button>
-          </p>
-        )}
+          <h1 className="stage-title">{title}</h1>
 
-        <div className="stage-attrib">
-          {poet &&
-            (onExplorePoet ? (
-              <button type="button" className="attrib-poet" onClick={() => onExplorePoet(poet)}>
-                {poet}
+          <div className="hero-sher">
+            {couplet && (couplet.urdu || couplet.roman) ? (
+              <div key={`${couplet.urdu || ''}${couplet.roman || ''}`}>
+                {couplet.urdu && (
+                  <p className="hero-urdu" lang="ur" dir="rtl">
+                    {couplet.urdu}
+                  </p>
+                )}
+                {couplet.roman && <p className="hero-roman">{couplet.roman}</p>}
+                {couplet.english && <p className="hero-english">{couplet.english}</p>}
+              </div>
+            ) : coupletFallback ? (
+              <p className="hero-english">{coupletFallback}</p>
+            ) : null}
+          </div>
+
+          {unknownLine && onExplainLine && (
+            <p className="unknown-line">
+              <button type="button" className="text-btn" onClick={() => onExplainLine(unknownLine)}>
+                What does this mean?
+              </button>
+            </p>
+          )}
+
+          <div className="stage-attrib">
+            {poet &&
+              (onExplorePoet ? (
+                <button type="button" className="attrib-poet" onClick={() => onExplorePoet(poet)}>
+                  {poet}
+                </button>
+              ) : (
+                <span className="attrib-poet">{poet}</span>
+              ))}
+            {onExploreSinger ? (
+              <button type="button" className="attrib-singer" onClick={() => onExploreSinger(singer)}>
+                {singer}
               </button>
             ) : (
-              <span className="attrib-poet">{poet}</span>
-            ))}
-          {onExploreSinger ? (
-            <button type="button" className="attrib-singer" onClick={() => onExploreSinger(singer)}>
-              {singer}
-            </button>
-          ) : (
-            <span className="attrib-singer">{singer}</span>
-          )}
-        </div>
-
-        <div className="transport">
-          <PoetryTimeline
-            currentTime={currentTime}
-            duration={duration}
-            markers={markers}
-            onSeek={readOnly ? () => {} : onSeek}
-            formatTime={formatTime}
-            sectionLabel={sectionLabel}
-            readOnly={readOnly}
-          />
-
-          <div className="transport-row">
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={onPrev}
-              disabled={!hasPrev}
-              aria-label="Previous in tonight's mehfil"
-            >
-              <SkipBack size={17} aria-hidden="true" />
-            </button>
-
-            <button
-              type="button"
-              className="icon-btn icon-btn--primary"
-              onClick={onTogglePlay}
-              disabled={resolving || readOnly}
-              aria-label={
-                readOnly
-                  ? 'The host controls playback in this mehfil'
-                  : resolving
-                  ? 'Finding the recording'
-                  : isPlaying
-                  ? 'Pause'
-                  : 'Play'
-              }
-              title={readOnly ? 'The host is playing the record tonight' : undefined}
-            >
-              {resolving ? (
-                <Loader2 size={20} className="spin" aria-hidden="true" />
-              ) : isPlaying ? (
-                <Pause size={20} aria-hidden="true" />
-              ) : (
-                <Play size={20} aria-hidden="true" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={onNext}
-              disabled={!hasNext}
-              aria-label="Next in tonight's mehfil"
-            >
-              <SkipForward size={17} aria-hidden="true" />
-            </button>
-
-            {onToggleLoop && !readOnly && (
-              <button
-                type="button"
-                className={`icon-btn ${loopSher ? 'icon-btn--on' : ''}`}
-                onClick={onToggleLoop}
-                disabled={!canLoop}
-                aria-pressed={loopSher}
-                aria-label={loopSher ? 'Stop repeating this couplet' : 'Repeat this couplet'}
-                title={
-                  canLoop
-                    ? loopSher
-                      ? 'Mukarrar — repeating this couplet'
-                      : 'Mukarrar — repeat this couplet'
-                    : 'Available once the couplets are following along'
-                }
-              >
-                <Repeat size={16} aria-hidden="true" />
-              </button>
+              <span className="attrib-singer">{singer}</span>
             )}
+          </div>
 
-            <span className="volume">
+          <div className="transport">
+            <PoetryTimeline
+              currentTime={currentTime}
+              duration={duration}
+              markers={markers}
+              onSeek={readOnly ? () => {} : onSeek}
+              formatTime={formatTime}
+              sectionLabel={sectionLabel}
+              readOnly={readOnly}
+            />
+
+            <div className="transport-row">
               <button
                 type="button"
                 className="icon-btn"
-                onClick={onToggleMute}
-                aria-label={isMuted ? 'Unmute' : 'Mute'}
+                onClick={onPrev}
+                disabled={!hasPrev}
+                aria-label="Previous in tonight's mehfil"
               >
-                {isMuted ? (
-                  <VolumeX size={16} aria-hidden="true" />
-                ) : (
-                  <Volume2 size={16} aria-hidden="true" />
-                )}
+                <SkipBack size={17} aria-hidden="true" />
               </button>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={isMuted ? 0 : volume}
-                aria-label="Volume"
-                onChange={(e) => onVolume(Number(e.target.value))}
-              />
-            </span>
 
-            {saveState && (
               <button
                 type="button"
-                className={`icon-btn ${saveState.saved ? 'icon-btn--on' : ''}`}
-                onClick={saveState.onToggle}
-                aria-pressed={saveState.saved}
+                className="icon-btn icon-btn--primary"
+                onClick={onTogglePlay}
+                disabled={resolving || readOnly}
                 aria-label={
-                  saveState.saved ? 'Remove from your collection' : 'Keep in your collection'
+                  readOnly
+                    ? 'The host controls playback in this mehfil'
+                    : resolving
+                    ? 'Finding the recording'
+                    : isPlaying
+                    ? 'Pause'
+                    : 'Play'
                 }
-                title={saveState.saved ? 'In your collection' : 'Keep this'}
+                title={readOnly ? 'The host is playing the record tonight' : undefined}
               >
-                <Heart
-                  size={16}
-                  aria-hidden="true"
-                  fill={saveState.saved ? 'currentColor' : 'none'}
-                />
+                {resolving ? (
+                  <Loader2 size={20} className="spin" aria-hidden="true" />
+                ) : isPlaying ? (
+                  <Pause size={20} aria-hidden="true" />
+                ) : (
+                  <Play size={20} aria-hidden="true" />
+                )}
               </button>
-            )}
 
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={onToggleQuiet}
-              aria-pressed={quiet}
-              aria-label={quiet ? 'Show the poetry and the mehfil' : 'Just listen'}
-              title={quiet ? 'Show everything' : 'Just listen'}
-            >
-              {quiet ? (
-                <Minimize2 size={16} aria-hidden="true" />
-              ) : (
-                <Maximize2 size={16} aria-hidden="true" />
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={onNext}
+                disabled={!hasNext}
+                aria-label="Next in tonight's mehfil"
+              >
+                <SkipForward size={17} aria-hidden="true" />
+              </button>
+
+              {onToggleLoop && !readOnly && (
+                <button
+                  type="button"
+                  className={`icon-btn ${loopSher ? 'icon-btn--on' : ''}`}
+                  onClick={onToggleLoop}
+                  disabled={!canLoop}
+                  aria-pressed={loopSher}
+                  aria-label={loopSher ? 'Stop repeating this couplet' : 'Repeat this couplet'}
+                  title={
+                    canLoop
+                      ? loopSher
+                        ? 'Mukarrar — repeating this couplet'
+                        : 'Mukarrar — repeat this couplet'
+                      : 'Available once the couplets are following along'
+                  }
+                >
+                  <Repeat size={16} aria-hidden="true" />
+                </button>
               )}
-            </button>
-          </div>
 
-          {playbackNote && <p className="playback-note">{playbackNote}</p>}
+              <span className="volume">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={onToggleMute}
+                  aria-label={isMuted ? 'Unmute' : 'Mute'}
+                >
+                  {isMuted ? (
+                    <VolumeX size={16} aria-hidden="true" />
+                  ) : (
+                    <Volume2 size={16} aria-hidden="true" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={isMuted ? 0 : volume}
+                  aria-label="Volume"
+                  onChange={(e) => onVolume(Number(e.target.value))}
+                />
+              </span>
 
-          {candidates && onPickCandidate && (
-            <div className="candidate-picker">
-              {candidates.length ? (
-                <>
-                  <span className="eyebrow eyebrow--accent" id="candidate-heading">Which recording is this?</span>
-                  <p className="playback-note">
-                    Several voices have sung this ghazal, and we couldn&rsquo;t tell which one belongs here. Choose the one you want to hear.
-                  </p>
-                  <ul className="candidate-list" aria-labelledby="candidate-heading">
-                    {candidates.map((c) => (
-                      <li key={c.videoId}>
-                        <button
-                          type="button"
-                          className="candidate-btn"
-                          onClick={() => onPickCandidate(c.videoId)}
-                          aria-label={`Play the recording by ${c.artist}: ${c.title}${c.duration ? `, ${c.duration}` : ''}`}
-                        >
-                          <span className="candidate-title">{c.artist}</span>
-                          <span className="candidate-sub">
-                            {c.title}
-                            {c.duration ? ` · ${c.duration}` : ''}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : (
-                <p className="playback-note">
-                  We couldn&rsquo;t find a recording of this ghazal. Try searching under Explore.
-                </p>
+              {saveState && (
+                <button
+                  type="button"
+                  className={`icon-btn ${saveState.saved ? 'icon-btn--on' : ''}`}
+                  onClick={saveState.onToggle}
+                  aria-pressed={saveState.saved}
+                  aria-label={
+                    saveState.saved ? 'Remove from your collection' : 'Keep in your collection'
+                  }
+                  title={saveState.saved ? 'In your collection' : 'Keep this'}
+                >
+                  <Heart
+                    size={16}
+                    aria-hidden="true"
+                    fill={saveState.saved ? 'currentColor' : 'none'}
+                  />
+                </button>
               )}
+
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={onToggleQuiet}
+                aria-pressed={quiet}
+                aria-label={quiet ? 'Show the poetry and the mehfil' : 'Just listen'}
+                title={quiet ? 'Show everything' : 'Just listen'}
+              >
+                {quiet ? (
+                  <Minimize2 size={16} aria-hidden="true" />
+                ) : (
+                  <Maximize2 size={16} aria-hidden="true" />
+                )}
+              </button>
             </div>
-          )}
+
+            {playbackNote && <p className="playback-note">{playbackNote}</p>}
+
+            {candidates && onPickCandidate && (
+              <div className="candidate-picker">
+                {candidates.length ? (
+                  <>
+                    <span className="eyebrow eyebrow--accent" id="candidate-heading">Which recording is this?</span>
+                    <p className="playback-note">
+                      Several voices have sung this ghazal, and we couldn&rsquo;t tell which one belongs here. Choose the one you want to hear.
+                    </p>
+                    <ul className="candidate-list" aria-labelledby="candidate-heading">
+                      {candidates.map((c) => (
+                        <li key={c.videoId}>
+                          <button
+                            type="button"
+                            className="candidate-btn"
+                            onClick={() => onPickCandidate(c.videoId)}
+                            aria-label={`Play the recording by ${c.artist}: ${c.title}${c.duration ? `, ${c.duration}` : ''}`}
+                          >
+                            <span className="candidate-title">{c.artist}</span>
+                            <span className="candidate-sub">
+                              {c.title}
+                              {c.duration ? ` · ${c.duration}` : ''}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="playback-note">
+                    We couldn&rsquo;t find a recording of this ghazal. Try searching under Explore.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

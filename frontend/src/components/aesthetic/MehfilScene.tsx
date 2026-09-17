@@ -7,6 +7,19 @@ interface MehfilSceneProps {
   isPlaying?: boolean
   coverUrl?: string
   onTogglePlay?: () => void
+  /** The first frame is on screen; a stand-in picture can give way. */
+  onReady?: () => void
+}
+
+/** Reports once, just after the first frame has been drawn. */
+function FirstFrame({ onReady }: { onReady?: () => void }) {
+  const told = useRef(false)
+  useFrame(() => {
+    if (told.current) return
+    told.current = true
+    requestAnimationFrame(() => onReady?.())
+  })
+  return null
 }
 
 // The Shama itself: the painted clay diya on its brass thali (diya.tsx), its
@@ -475,12 +488,13 @@ function SceneContents({ isPlaying, coverUrl, onTogglePlay }: MehfilSceneProps) 
   )
 }
 
-export function MehfilScene({ isPlaying = false, coverUrl, onTogglePlay }: MehfilSceneProps) {
+export function MehfilScene({ isPlaying = false, coverUrl, onTogglePlay, onReady }: MehfilSceneProps) {
   return (
     <div className="mehfil-scene" aria-hidden="true">
       {/* Slightly pulled back camera with adjusted fov to frame both candle and tilted deck */}
       <Canvas camera={{ position: [0, 0.36, 1.7], fov: 42 }} dpr={[1, 1.5]}>
         <SceneContents isPlaying={isPlaying} coverUrl={coverUrl} onTogglePlay={onTogglePlay} />
+        <FirstFrame onReady={onReady} />
       </Canvas>
     </div>
   )

@@ -5,15 +5,16 @@
  *
  *   - vinyl crackle while the record spins up, which slows and fades as the
  *     record winds down;
- *   - "ta-daa" as the view starts to move in: a low Pa, then Sa, plucked and
- *     left to ring, with a soft drone swelling under them through the flash;
+ *   - "ta-daa" as the record comes to rest and the camera pushes in: a low Pa,
+ *     then Sa, plucked and left to ring, over a soft drone that swells from
+ *     the moment the view starts to move, through the flash;
  *   - air rushing as the camera pushes into the label;
  *   - a high shimmer on the golden flash.
  *
  * It rings for about five seconds, in the key the room hums in a moment
  * later. It is quiet by design, and stays silent when the listener has turned
- * the ambience off or the browser won't allow sound yet (a first visit,
- * before any tap, usually won't).
+ * the ambience off. A first visit usually can't make sound before a tap, so
+ * the opening asks for one (`playable`, `unlock`).
  */
 
 import { makeImpulse, SA, semis } from './ambientEngine'
@@ -31,8 +32,15 @@ export interface IntroCues {
 }
 
 export interface IntroSound {
-  /** Schedule everything from now. Call on the first frame of the picture. */
-  start(): void
+  /** Whether the browser will let it sound right now. */
+  playable(): boolean
+  /** Ask the browser for sound. Call inside a tap or key press. */
+  unlock(): void
+  /**
+   * Schedule everything as if the picture began `offset` seconds ago. Call on
+   * the frame the picture's clock starts.
+   */
+  start(offset?: number): void
   /** Silence it at once. */
   stop(): void
   /** Let it die away over `seconds` (a skip), rather than cutting it. */
@@ -42,6 +50,8 @@ export interface IntroSound {
 const LEVEL = 0.5
 /** The gap between "ta" and "daa". */
 const DAA_AFTER = 0.42
+/** "Ta" waits this long after the view starts to move: it lands as the record comes to rest. */
+const TA_AFTER_SHIFT = 1
 
 function ambienceOff(): boolean {
   try {
@@ -171,15 +181,17 @@ export function createIntroSound(cues: IntroCues): IntroSound | null {
       env.connect(reverb)
       for (const cents of [-3, 3]) tone('sawtooth', freq, when, when + 0.9 + ring * 6, cents).connect(color)
     }
-    const ta = at(cues.shift)
+    const ta = at(cues.shift + TA_AFTER_SHIFT)
     const daa = ta + DAA_AFTER
     pluck(SA * semis(-5), ta, 0.2, 1.1)
     pluck(SA, daa, 0.24, 1.7)
 
-    // The drone under them: Sa, low Pa and low Sa, swelling to the flash, then letting go.
+    // The drone under them: Sa, low Pa and low Sa, rising as the view starts to
+    // move and swelling to the flash, then letting go.
     const cut = at(cues.cut)
+    const padFrom = at(cues.shift + DAA_AFTER)
     const pad = ctx.createGain()
-    pad.gain.setValueAtTime(0, daa)
+    pad.gain.setValueAtTime(0, padFrom)
     pad.gain.linearRampToValueAtTime(1, cut)
     pad.gain.setValueAtTime(1, cut + 0.8)
     pad.gain.setTargetAtTime(0, cut + 0.8, 1.2)
@@ -196,7 +208,7 @@ export function createIntroSound(cues: IntroCues): IntroSound | null {
     ]) {
       const g = ctx.createGain()
       g.gain.value = level
-      tone('triangle', freq, daa, cut + 7, 2).connect(g).connect(pad)
+      tone('triangle', freq, padFrom, cut + 7, 2).connect(g).connect(pad)
     }
 
     // The push into the label: air opening up, gone at the cut.
@@ -232,16 +244,20 @@ export function createIntroSound(cues: IntroCues): IntroSound | null {
   }
 
   return {
-    start() {
+    playable: () => !closed && ctx.state === 'running',
+    unlock() {
+      void ctx.resume().catch(() => {})
+    },
+    start(offset = 0) {
       const startedAt = performance.now()
-      const lag = () => (performance.now() - startedAt) / 1000
+      const waited = () => (performance.now() - startedAt) / 1000
       if (ctx.state === 'running') {
-        schedule(0)
+        schedule(offset)
         return
       }
       // A resume granted late (say, by the tap on Skip) would start the sound
       // out of step with the picture; past half a second, stay silent.
-      ctx.resume().then(() => (lag() < 0.5 ? schedule(lag()) : close()), close)
+      ctx.resume().then(() => (waited() < 0.5 ? schedule(offset + waited()) : close()), close)
       window.setTimeout(() => {
         if (ctx.state !== 'running') close()
       }, 500)

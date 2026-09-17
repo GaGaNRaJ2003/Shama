@@ -15,13 +15,12 @@
  */
 
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { createIntroSound, type IntroSound } from '../../audio/introSound'
+import { markIntroSeen } from './introGate'
 import { ClassicalDiya, DiyaFlame, paintGlow, WICK_TIP, type FlameControls } from './diya'
 import { useVinylGrooveTexture } from './MehfilScene'
-
-const SEEN_KEY = 'shama.intro'
 
 /** Seconds from the first frame. */
 const CUE = {
@@ -36,6 +35,11 @@ const CUE = {
   arrive: 4.72, // the camera has settled on the name
   cut: 4.98, // black, then the flash
 }
+/**
+ * Where the opening waits when the browser holds sound until a tap: the ember
+ * has appeared and the flame not yet caught. The tap lights it from there.
+ */
+const HOLD_AT = 0.65
 /** The gentle version for reduced motion: the diya lights and the room opens. */
 const CALM = { ember: 0.35, lit: 1.3, reveal: 1.8 }
 const FLASH_MS = 160
@@ -44,35 +48,6 @@ const REVEAL_MS = 900
 const STALL_MS = 4000
 /** The longest the label waits for its typefaces: it must be printed before the record is seen (CUE.flare). */
 const LABEL_WAIT_MS = 1200
-
-// ---------------------------------------------------------------- when ------
-
-export function prefersReducedMotion(): boolean {
-  return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-}
-
-/** First visits get the opening; `?intro=1` asks for it. */
-export function shouldPlayIntro(): boolean {
-  if (typeof window === 'undefined') return false
-  const params = new URLSearchParams(window.location.search)
-  if (params.get('intro') === '1') return true
-  // A shared mehfil link joins a room already under way.
-  if (params.get('mehfil')) return false
-  if (prefersReducedMotion()) return false
-  try {
-    return !localStorage.getItem(SEEN_KEY)
-  } catch {
-    return true
-  }
-}
-
-function markIntroSeen() {
-  try {
-    localStorage.setItem(SEEN_KEY, 'seen')
-  } catch {
-    /* private mode: it will play again next time */
-  }
-}
 
 // ---------------------------------------------------------------- easing ----
 
@@ -380,12 +355,17 @@ function useParticles() {
 
 interface SceneProps {
   calm: boolean
-  onStart: () => void
+  /** While true the picture waits at HOLD_AT for the listener's tap. */
+  held: { current: boolean }
+  /** The first frame has been drawn while waiting. */
+  onHeld: () => void
+  /** The clock has started, `offset` seconds in. */
+  onStart: (offset: number) => void
   onCut: () => void
   onCalmReveal: () => void
 }
 
-function IntroScene({ calm, onStart, onCut, onCalmReveal }: SceneProps) {
+function IntroScene({ calm, held, onHeld, onStart, onCut, onCalmReveal }: SceneProps) {
   const { camera, size } = useThree()
   const groove = useVinylGrooveTexture()
   const label = useLabelTexture()
@@ -418,6 +398,7 @@ function IntroScene({ calm, onStart, onCut, onCalmReveal }: SceneProps) {
   const moteMat = useRef<THREE.PointsMaterial>(null)
 
   const startRef = useRef<number | null>(null)
+  const heldOnce = useRef(false)
   const doneRef = useRef(false)
   const shotRef = useRef<Shot>({ pos: new THREE.Vector3(), look: new THREE.Vector3() })
   const scratch = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3() }), [])
@@ -432,14 +413,21 @@ function IntroScene({ calm, onStart, onCut, onCalmReveal }: SceneProps) {
 
   useFrame(() => {
     const now = performance.now()
-    if (startRef.current === null) {
+    const waiting = held.current && pinned === null
+    if (waiting) {
+      if (!heldOnce.current) {
+        heldOnce.current = true
+        onHeld()
+      }
+    } else if (startRef.current === null) {
       // The label arrives within LABEL_WAIT_MS, well before the record is seen,
       // so the clock needn't wait for it. The opening dark covers the first
-      // frames' shader compiling.
-      startRef.current = now
-      onStart()
+      // frames' shader compiling. After a wait, the clock carries on from the ember.
+      const offset = heldOnce.current ? HOLD_AT : 0
+      startRef.current = now - offset * 1000
+      onStart(offset)
     }
-    const t = pinned ?? (now - startRef.current) / 1000
+    const t = waiting ? HOLD_AT : pinned ?? (now - (startRef.current ?? now)) / 1000
     const cues = calm ? { ...CUE, ember: CALM.ember, lit: CALM.lit } : CUE
 
     // ---- the flame -------------------------------------------------------
@@ -473,7 +461,11 @@ function IntroScene({ calm, onStart, onCut, onCalmReveal }: SceneProps) {
       halo.current.scale.set(s * 0.8, s, 1)
       haloMat.current.opacity = visible * Math.min(0.85, 0.15 + 0.45 * lit)
     }
-    if (ember.current) ember.current.opacity = visible * (1 - ignite) * 0.9
+    if (ember.current) {
+      // Waiting, the ember breathes, asking to be lit.
+      const breath = waiting ? 0.6 + 0.4 * Math.sin(now / 420) : 1
+      ember.current.opacity = visible * (1 - ignite) * 0.9 * breath
+    }
     if (roomGlow.current) roomGlow.current.opacity = 0.028 * lit
 
     // ---- sparks off the flare, motes in the light -------------------------
@@ -731,7 +723,7 @@ class SceneBoundary extends Component<{ onError: () => void; children: ReactNode
 
 // ---------------------------------------------------------------- overlay ---
 
-type Phase = 'dark' | 'scene' | 'burst' | 'reveal'
+type Phase = 'dark' | 'waiting' | 'scene' | 'burst' | 'reveal'
 
 interface IntroSequenceProps {
   /** The gentle version: no spin, no dive, no flash. */
@@ -750,6 +742,8 @@ export function IntroSequence({ calm, silent = false, onReveal, onDone }: IntroS
   const rootRef = useRef<HTMLDivElement>(null)
   const skipRef = useRef<HTMLButtonElement>(null)
   const soundRef = useRef<IntroSound | null>(null)
+  const heldRef = useRef(false)
+  const tapRef = useRef<HTMLButtonElement>(null)
   const timers = useRef<number[]>([])
   const callbacks = useRef({ onReveal, onDone })
   callbacks.current = { onReveal, onDone }
@@ -793,9 +787,21 @@ export function IntroSequence({ calm, silent = false, onReveal, onDone }: IntroS
     later(reveal, FLASH_MS)
   }, [reveal])
 
-  const start = useCallback(() => {
-    soundRef.current?.start()
+  const start = useCallback((offset: number) => {
+    soundRef.current?.start(offset)
     go('scene')
+  }, [])
+
+  const held = useCallback(() => {
+    go('waiting')
+  }, [])
+
+  // The listener's tap is what lets the browser sound, and it lights the lamp.
+  const light = useCallback(() => {
+    if (!heldRef.current) return
+    soundRef.current?.unlock()
+    heldRef.current = false
+    skipRef.current?.focus({ preventScroll: true })
   }, [])
 
   const skip = useCallback(() => {
@@ -803,21 +809,32 @@ export function IntroSequence({ calm, silent = false, onReveal, onDone }: IntroS
     reveal()
   }, [reveal])
 
+  // Before the scene's first frame: decide whether the opening must wait for a tap.
+  useLayoutEffect(() => {
+    if (calm || silent) return
+    const sound = createIntroSound({
+      spinStart: CUE.spinStart,
+      shift: CUE.shift,
+      rest: CUE.rest,
+      arrive: CUE.arrive,
+      cut: CUE.cut,
+    })
+    soundRef.current = sound
+    heldRef.current = !!sound && !sound.playable()
+  }, [calm, silent])
+
+  // Focus sits on the tap while the lamp waits, on Skip otherwise.
   useEffect(() => {
-    if (!calm && !silent) {
-      soundRef.current = createIntroSound({
-        spinStart: CUE.spinStart,
-        shift: CUE.shift,
-        rest: CUE.rest,
-        arrive: CUE.arrive,
-        cut: CUE.cut,
-      })
-    }
-    skipRef.current?.focus({ preventScroll: true })
+    if (phase === 'waiting') tapRef.current?.focus({ preventScroll: true })
+  }, [phase])
+
+  useEffect(() => {
+    if (!heldRef.current) skipRef.current?.focus({ preventScroll: true })
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') skip()
     }
     window.addEventListener('keydown', onKey)
+    // No first frame at all (no WebGL, say): open the room. A scene waiting for its tap has drawn.
     const stall = window.setTimeout(() => {
       if (phaseRef.current === 'dark') reveal()
     }, STALL_MS)
@@ -837,12 +854,24 @@ export function IntroSequence({ calm, silent = false, onReveal, onDone }: IntroS
       <div className="intro-stage" aria-hidden="true">
         <SceneBoundary onError={reveal}>
           <Canvas dpr={[1, 1.75]} gl={{ antialias: true }} camera={{ fov: 38, near: 0.005, far: 30, position: [0, 0.5, 2] }}>
-            <IntroScene calm={calm} onStart={start} onCut={cut} onCalmReveal={reveal} />
+            <IntroScene
+              calm={calm}
+              held={heldRef}
+              onHeld={held}
+              onStart={start}
+              onCut={cut}
+              onCalmReveal={reveal}
+            />
           </Canvas>
         </SceneBoundary>
       </div>
       <div className="intro-flash" aria-hidden="true" />
       <div className="intro-handoff" aria-hidden="true" />
+      {phase === 'waiting' && (
+        <button ref={tapRef} type="button" className="intro-tap" onClick={light}>
+          <span className="intro-tap-words">Tap to light the lamp</span>
+        </button>
+      )}
       <button ref={skipRef} type="button" className="intro-skip" onClick={skip}>
         Skip intro
       </button>

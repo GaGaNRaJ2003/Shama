@@ -13,6 +13,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/* The stage's stand-in still, fetched alongside the scripts. */}
+        <link rel="preload" as="image" href="/stage-poster.webp" type="image/webp" fetchPriority="high" />
+      </head>
       <body>
         {children}
       </body>
