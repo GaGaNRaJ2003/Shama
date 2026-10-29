@@ -679,6 +679,24 @@ export function App() {
       })
   }, [])
 
+  // Wake the services behind the API while the listener is still choosing:
+  // Render's free tier sleeps them after 15 idle minutes, and the first real
+  // request then waits up to 90s or fails. Tried once more in case the API
+  // itself was asleep and missed the first call.
+  useEffect(() => {
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const warm = (again: boolean) =>
+      fetch(`${API_BASE}/api/warm`)
+        .then((res) => {
+          if (!res.ok && again) retry = setTimeout(() => warm(false), 15_000)
+        })
+        .catch(() => {
+          if (again) retry = setTimeout(() => warm(false), 15_000)
+        })
+    warm(true)
+    return () => clearTimeout(retry)
+  }, [])
+
   // A curated work changed → reset the transport. Playback (re)starts on demand
   // via handlePlayPause, which resolves a YouTube video for the work. The
   // resolve token and `resolving` are left alone: by the time the effect runs,

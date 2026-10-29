@@ -242,6 +242,21 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'shama-api', db: isDbConfigured })
 })
 
+// GET /api/warm — the frontend calls this as the page loads. Render's free tier
+// puts each service to sleep after 15 idle minutes, and the first request then
+// waits 20-90s or gets an instant 503. Pinging both services' bare /health here
+// starts them waking while the listener is still choosing what to hear.
+app.get('/api/warm', rateLimit('warm', 30, 60_000), (_req, res) => {
+  for (const base of [YT_SERVICE_URL, ML_ENGINE_URL]) {
+    // Not awaited: nobody should wait for a service to wake. The body is
+    // discarded so the connection is released.
+    fetchUpstream(`${base}/health`, {}, 120_000)
+      .then((r) => r.body?.cancel())
+      .catch(() => {})
+  }
+  res.status(202).end()
+})
+
 /**
  * The catalogue as a brief list. Used when Supabase is unconfigured AND when a
  * configured Supabase can't answer — the `works` table does not exist on the
