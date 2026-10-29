@@ -407,7 +407,8 @@ app.post('/api/align-couplets', rateLimit('align-couplets', 30, 60_000), async (
 // GET /api/ml/health — ML Engine health check
 app.get('/api/ml/health', async (req, res) => {
   try {
-    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/health`, {}, 10_000)
+    // /health/deep: the engine's own /health is a bare liveness probe for Render.
+    const upstream = await fetchUpstream(`${ML_ENGINE_URL}/health/deep`, {}, 10_000)
     const data = await upstream.json()
     return res.status(upstream.status).json(data)
   } catch (err) {

@@ -152,7 +152,7 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 async def require_internal_key(request: Request, call_next):
     # scope["path"], not request.url.path: routing uses the scope, and this
     # Starlette lets a crafted Host header change url.path (CVE-2026-48710).
-    # /health stays open for Render's health check.
+    # Only the bare /health stays open, for Render's health check.
     if INTERNAL_API_KEY and request.scope["path"] != "/health":
         sent = request.headers.get("x-internal-key", "").encode()
         if not hmac.compare_digest(sent, INTERNAL_API_KEY.encode()):
@@ -279,6 +279,16 @@ def _rag_status() -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 @app.get("/health")
 async def health():
+    """Liveness, for Render's health check: answers at once and touches nothing
+    outside this process. Render allows it 5s and restarts the instance on a
+    miss, so it must not wait on Supabase or the embedding model. It used to,
+    and missed that deadline while the model loaded. /health/deep has the rest.
+    """
+    return {"status": "healthy" if llm_router else "degraded", "service": "shama-ml-engine"}
+
+
+@app.get("/health/deep")
+async def health_deep():
     """Health check that proves reachability rather than reporting env vars.
 
     The previous version reported `cache_enabled: True` whenever credentials
