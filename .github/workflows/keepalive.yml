@@ -1,0 +1,40 @@
+# Keep the backend awake in the evening, when people listen.
+#
+# Render's free tier puts each service to sleep after 15 idle minutes, and the
+# API cannot wake the other two (a request from one Render service to a
+# sleeping one fails at once; see /api/warm in backend/src/server.ts). Pinging
+# from here, outside Render, keeps all three awake from 18:00 to 00:00 IST:
+# about 560 of the workspace's 750 free instance hours a month. Outside these
+# hours they sleep, and the first visitor wakes them.
+#
+# Schedules are in UTC, and GitHub may start a run a few minutes late.
+# GitHub disables scheduled workflows after 60 days without a commit.
+
+name: Evening keep-alive
+
+on:
+  schedule:
+    - cron: '30-55/5 12 * * *' # 18:00-18:25 IST
+    - cron: '*/5 13-17 * * *' #  18:30-23:25 IST
+    - cron: '0-30/5 18 * * *' #  23:30-00:00 IST
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping the API and the two services it names
+        run: |
+          api=https://shama-api.onrender.com
+          # The API answers with the services' bare /health URLs, which need no key.
+          urls=$(curl -fsS --max-time 120 "$api/api/warm" \
+            | python3 -c "import json, sys; print(' '.join(json.load(sys.stdin)['ping']))")
+          for url in "$api/health" $urls; do
+            # A failed ping is logged, not fatal: a red run every five minutes
+            # during an outage would only flood the owner's inbox.
+            curl -fsS -o /dev/null --max-time 120 -w "$url %{http_code} %{time_total}s\n" "$url" \
+              || echo "$url failed"
+          done
