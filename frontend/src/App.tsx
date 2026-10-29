@@ -640,7 +640,9 @@ export function App() {
         title: nowTitleRef.current,
         artist: nowArtistRef.current,
         durationSeconds: fresh ? Math.round(durationRef.current) : 0,
-        queue: mehfil.map((m) => ({ title: m.title, artist: m.artist })),
+        // The server keeps 50 and refuses frames over 64 KiB; past that a long
+        // queue would be closed with 1009 and reconnect in a loop.
+        queue: mehfil.slice(0, 50).map((m) => ({ title: m.title, artist: m.artist })),
         queueIndex: currentMehfilId ? mehfil.findIndex((m) => m.id === currentMehfilId) : -1,
       })
     }
