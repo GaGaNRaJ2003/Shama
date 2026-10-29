@@ -1944,7 +1944,13 @@ export function App() {
                   ) : undefined
                 }
               />
-              {awaitingChoice && <FeelingsGrid works={catalog} onChooseWork={(work) => void openWork(work, true)} />}
+              {awaitingChoice && (
+                <FeelingsGrid
+                  works={catalog}
+                  onChooseWork={(work) => void openWork(work, true)}
+                  onPreviewFeeling={ambience.preview}
+                />
+              )}
             </div>
 
             <div

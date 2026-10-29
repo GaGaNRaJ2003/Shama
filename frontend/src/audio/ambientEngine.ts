@@ -7,6 +7,9 @@
  * turning into a jingle. It is deliberately very quiet and heavily softened:
  * it is the candle, not the singer, and it steps aside whenever real music
  * or narration plays (see useAmbience).
+ *
+ * While a feeling on the arrival screen is being considered, the voice sings
+ * that feeling's own raag instead (FEELING_VOICES); the tanpura never changes.
  */
 
 export type AmbientState = 'suspended' | 'running' | 'closed'
@@ -37,6 +40,145 @@ const PHRASES: number[][] = [
   [0], //                    a single held sa
 ]
 const FLUTE_SA = SA * 2
+
+/** How the flute sings: a raag's phrases, and how they are breathed. */
+interface Voice {
+  phrases: number[][]
+  /** Seconds each note is held; the last note of a phrase rests longer. */
+  hold: [number, number]
+  last: [number, number]
+  /** Silence after a phrase. */
+  gap: [number, number]
+  /** Meend: the time constant of the slide from one note into the next. */
+  glide: number
+  /** Vibrato rate and depth, in Hz. Slow and wide reads as andolan. */
+  vibrato: [number, number]
+  /** Loudness against the room's own voice. */
+  level: number
+  /** Each later note of a phrase this much softer: a line that trails away. */
+  fade?: number
+}
+
+const YAMAN: Voice = {
+  phrases: PHRASES,
+  hold: [0.8, 1.9],
+  last: [2.4, 4],
+  gap: [7, 16],
+  glide: 0.07,
+  vibrato: [5.2, 1.1],
+  level: 1,
+}
+
+// Each feeling on the arrival screen has a raag of its own, after the rasa the
+// tradition gives it, each a different shade of the ghazal's melancholy. While
+// a card is considered the voice comes a little nearer and its silences shorten,
+// so the feeling is heard before it is chosen.
+// Komal (flat) notes are marked ♭, tivra ma ♯; a leading - is the lower octave.
+const NEAR = 1.3
+export const FEELING_VOICES = {
+  // Bhupali: five open notes, consoling.
+  umeed: {
+    phrases: [
+      [4, 2, 0, -3, 0, 2, 4], //   ga re sa -dha sa re ga
+      [7, 4, 9, 7, 4, 2, 0], //    pa ga dha pa ga re sa
+      [0, 2, 4, 7, 9, 12], //      sa re ga pa dha sa', rising
+      [9, 7, 4, 7], //             dha pa ga pa
+    ],
+    hold: [0.7, 1.5], last: [2.2, 3.4], gap: [1.8, 3.5], glide: 0.07, vibrato: [5, 1], level: NEAR,
+  },
+  // Desh: the monsoon's yearning, reaching up and falling back.
+  arzoo: {
+    phrases: [
+      [2, 5, 7, 11, 12], //        re ma pa ni sa'
+      [12, 10, 9, 7, 5, 4, 2], //  sa' ni♭ dha pa ma ga re
+      [2, 5, 7, 5, 4, 2, 4, 0], // re ma pa ma ga re ga sa
+      [7, 9, 7, 5, 4, 2], //       pa dha pa ma ga re
+    ],
+    hold: [0.9, 1.8], last: [2.6, 3.8], gap: [2, 4], glide: 0.09, vibrato: [5.2, 1.3], level: NEAR,
+  },
+  // Marwa: sunset unease. It circles re♭ and dha and won't come home to sa.
+  bechaini: {
+    phrases: [
+      [-1, 1, 4, 6, 9], //         -ni re♭ ga ma♯ dha
+      [9, 6, 4, 1], //             dha ma♯ ga re♭
+      [6, 9, 11, 9, 6, 4, 1], //   ma♯ dha ni dha ma♯ ga re♭
+      [-3, -1, 1], //              -dha -ni re♭
+    ],
+    hold: [0.35, 0.9], last: [1.4, 2.2], gap: [1, 2.2], glide: 0.04, vibrato: [6.4, 1.6], level: NEAR,
+  },
+  // Bageshree: the night raag of waiting for the beloved.
+  khwahish: {
+    phrases: [
+      [-2, -3, 0, 5], //           -ni♭ -dha sa ma
+      [3, 5, 9, 10, 9, 5], //      ga♭ ma dha ni♭ dha ma
+      [5, 3, 2, 0], //             ma ga♭ re sa
+      [9, 10, 12, 10, 9, 5, 3], // dha ni♭ sa' ni♭ dha ma ga♭
+    ],
+    hold: [0.9, 1.9], last: [2.6, 4], gap: [2.2, 4], glide: 0.1, vibrato: [4.8, 1.2], level: NEAR,
+  },
+  // Pilu: the thumri's wistfulness, both ga's at once.
+  yaad: {
+    phrases: [
+      [-1, 0, 3, 2, 3, 0, -1], //  -ni sa ga♭ re ga♭ sa -ni
+      [-5, -1, 0], //              -pa -ni sa
+      [4, 5, 7, 9, 7, 5, 3, 2, 0], // ga ma pa dha pa ma ga♭ re sa
+      [7, 10, 9, 7], //            pa ni♭ dha pa
+    ],
+    hold: [1, 2], last: [3, 4.4], gap: [2.4, 4.5], glide: 0.08, vibrato: [5, 1], level: NEAR,
+  },
+  // Darbari Kanada: grave and low, swaying slowly on ga♭ and dha♭.
+  hijr: {
+    phrases: [
+      [2, 3, 2, 0], //             re ga♭ re sa
+      [-2, -4, -2, 0], //          -ni♭ -dha♭ -ni♭ sa
+      [5, 7, 8, 7, 5, 3, 2, 0], // ma pa dha♭ pa ma ga♭ re sa
+      [3], //                      a held ga♭
+    ],
+    hold: [1.4, 2.6], last: [3.4, 5], gap: [2.5, 4.5], glide: 0.16, vibrato: [2.4, 3.2], level: NEAR,
+  },
+  // Shivranjani, each phrase trailing away as it goes.
+  faramoshi: {
+    phrases: [
+      [7, 9, 12, 9, 7, 3, 2, 0], // pa dha sa' dha pa ga♭ re sa
+      [3, 2, 0, -3, 0], //         ga♭ re sa -dha sa
+      [0, 2, 3, 7, 9], //          sa re ga♭ pa dha
+      [3, 2, 3], //                ga♭ re ga♭
+    ],
+    hold: [1, 1.8], last: [2, 3], gap: [2.6, 4.6], glide: 0.09, vibrato: [4.6, 0.9], level: NEAR, fade: 0.8,
+  },
+  // Bhairavi: every note flat, returning to the same grievance.
+  shikwa: {
+    phrases: [
+      [0, 1, 3, 1, 0], //          sa re♭ ga♭ re♭ sa
+      [5, 3, 1, 0], //             ma ga♭ re♭ sa
+      [7, 8, 7, 5, 3, 1, 0], //    pa dha♭ pa ma ga♭ re♭ sa
+      [3, 3, 1, 3, 1, 0], //       ga♭ ga♭ re♭ ga♭ re♭ sa, insisting
+    ],
+    hold: [0.6, 1.3], last: [2.2, 3.2], gap: [1.6, 3.2], glide: 0.06, vibrato: [5.6, 1.4], level: NEAR,
+  },
+  // Malkauns: the midnight raag, five dark notes and no re or pa.
+  'na-umeedi': {
+    phrases: [
+      [-2, 0, 3, 5, 3, 0], //      -ni♭ sa ga♭ ma ga♭ sa
+      [5, 8, 10, 8, 5, 3], //      ma dha♭ ni♭ dha♭ ma ga♭
+      [3, 5, 3, 0, -2, -4, 0], //  ga♭ ma ga♭ sa -ni♭ -dha♭ sa
+      [-4], //                     a held -dha♭
+    ],
+    hold: [1.3, 2.4], last: [3.6, 5], gap: [3, 5], glide: 0.13, vibrato: [3.6, 1.6], level: NEAR,
+  },
+  // Bhairav: the dawn raag, re♭ and dha♭ swaying, rising to sa'.
+  bedaari: {
+    phrases: [
+      [0, 1, 1, 0], //             sa re♭ re♭ sa
+      [4, 5, 8, 7], //             ga ma dha♭ pa
+      [5, 4, 5, 1, 0], //          ma ga ma re♭ sa
+      [7, 8, 11, 12], //           pa dha♭ ni sa', the day breaking
+    ],
+    hold: [0.9, 1.7], last: [2.6, 3.6], gap: [2, 4], glide: 0.09, vibrato: [4.2, 2], level: NEAR,
+  },
+} satisfies Record<string, Voice>
+
+export type Feeling = keyof typeof FEELING_VOICES
 
 const rand = (min: number, max: number) => min + Math.random() * (max - min)
 
@@ -82,6 +224,9 @@ export class AmbientEngine {
   private nextPhrase = 0
   private wanted = false
   private fadeIn = 4
+  private voice: Voice = YAMAN
+  /** The latest phrase, sounding or scheduled, so a new feeling can cut it short. */
+  private sounding: { mute: GainNode; sources: OscillatorNode[]; end: number } | null = null
 
   constructor(private readonly onState: (state: AmbientState) => void) {}
 
@@ -125,6 +270,37 @@ export class AmbientEngine {
     if (!this.wanted) return
     const ctx = this.ensure()
     if (ctx && ctx.state !== 'running') void ctx.resume().catch(() => {})
+  }
+
+  /**
+   * Sing a feeling's raag while it is being considered; null hands the voice
+   * back to the room's Yaman. A new feeling is heard at once (the phrase in the
+   * air bows out); returning to Yaman lets the last phrase finish first.
+   */
+  setFeeling(feeling: Feeling | null) {
+    const voice: Voice = feeling ? FEELING_VOICES[feeling] : YAMAN
+    if (voice === this.voice) return
+    this.voice = voice
+    const ctx = this.ctx
+    // Silent or fading out for a recording: the next phrase will simply use it.
+    if (!ctx || ctx.state !== 'running' || !this.wanted) return
+    const now = ctx.currentTime
+    if (voice === YAMAN) {
+      this.nextPhrase = Math.max(this.nextPhrase, now + rand(4, 8))
+      return
+    }
+    const s = this.sounding
+    if (s && s.end > now) {
+      s.mute.gain.setTargetAtTime(0, now, 0.15)
+      for (const src of s.sources) {
+        try {
+          src.stop(Math.min(s.end, now + 1))
+        } catch {
+          /* already stopped */
+        }
+      }
+    }
+    this.nextPhrase = now + 0.5
   }
 
   dispose() {
@@ -274,7 +450,7 @@ export class AmbientEngine {
     }
     if (this.nextPhrase < horizon) {
       const length = this.phrase(Math.max(this.nextPhrase, ctx.currentTime + 0.05))
-      this.nextPhrase += length + rand(7, 16)
+      this.nextPhrase += length + rand(...this.voice.gap)
     }
   }
 
@@ -314,20 +490,23 @@ export class AmbientEngine {
   /** One phrase on a single breath, sliding between notes (meend). Returns its length. */
   private phrase(start: number): number {
     const ctx = this.ctx!
-    const notes = PHRASES[Math.floor(Math.random() * PHRASES.length)]
-    const peak = 0.085 * rand(0.85, 1.1)
+    const v = this.voice
+    const notes = v.phrases[Math.floor(Math.random() * v.phrases.length)]
+    const peak = 0.085 * v.level * rand(0.85, 1.1)
     const osc = ctx.createOscillator()
     const env = ctx.createGain()
+    // Its own fader, untouched by the envelope, so a new feeling can cut it.
+    const mute = ctx.createGain()
     const tone = ctx.createBiquadFilter()
     const vibrato = ctx.createOscillator()
     const vibratoDepth = ctx.createGain()
     osc.setPeriodicWave(this.fluteWave!)
     tone.type = 'lowpass'
     tone.frequency.value = 1900
-    osc.connect(tone).connect(env).connect(this.fluteBus!)
-    vibrato.frequency.value = 5.2
+    osc.connect(tone).connect(env).connect(mute).connect(this.fluteBus!)
+    vibrato.frequency.value = v.vibrato[0]
     vibratoDepth.gain.setValueAtTime(0, start)
-    vibratoDepth.gain.linearRampToValueAtTime(1.1, start + 1.2)
+    vibratoDepth.gain.linearRampToValueAtTime(v.vibrato[1], start + 1.2)
     vibrato.connect(vibratoDepth).connect(osc.frequency)
 
     let t = start
@@ -336,12 +515,13 @@ export class AmbientEngine {
     env.gain.exponentialRampToValueAtTime(peak, t + 0.4)
     notes.forEach((note, i) => {
       const last = i === notes.length - 1
-      const hold = last ? rand(2.4, 4) : rand(0.8, 1.9)
+      const hold = last ? rand(...v.last) : rand(...v.hold)
       if (i > 0) {
-        osc.frequency.setTargetAtTime(FLUTE_SA * semis(note), t, 0.07)
+        const level = peak * Math.pow(v.fade ?? 1, i)
+        osc.frequency.setTargetAtTime(FLUTE_SA * semis(note), t, v.glide)
         // A slight lift of the breath between notes.
-        env.gain.setTargetAtTime(peak * 0.72, t - 0.1, 0.04)
-        env.gain.setTargetAtTime(peak, t + 0.06, 0.08)
+        env.gain.setTargetAtTime(level * 0.72, t - 0.1, 0.04)
+        env.gain.setTargetAtTime(level, t + 0.06, 0.08)
       }
       t += hold
     })
@@ -351,12 +531,16 @@ export class AmbientEngine {
     vibrato.start(start)
     osc.stop(end)
     vibrato.stop(end)
+    const sounding = { mute, sources: [osc, vibrato], end }
+    this.sounding = sounding
     osc.onended = () => {
+      if (this.sounding === sounding) this.sounding = null
       osc.disconnect()
       vibrato.disconnect()
       vibratoDepth.disconnect()
       tone.disconnect()
       env.disconnect()
+      mute.disconnect()
     }
     return t - start
   }

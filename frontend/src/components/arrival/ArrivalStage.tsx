@@ -4,8 +4,9 @@
 // farmaish, and the scroll to write it on. It gives way to the stage at the
 // first choice. `?arrival=off` opens the room as it used to be, for comparison.
 
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Play } from 'lucide-react'
+import type { Feeling } from '../../audio/ambientEngine'
 import type { WorkData } from '../../data/ghazals'
 import { FarmaishScroll, type RecordingHit } from './FarmaishScroll'
 import './arrival.css'
@@ -43,8 +44,9 @@ export function ArrivalStage(props: ArrivalStageProps) {
 }
 
 // A way in by feeling: one well-loved ghazal for each state of the heart,
-// ordered from hope, through longing and loss, to awakening.
-const FEELINGS: { workId: string; urdu: string; roman: string; english: string; hue: string }[] = [
+// ordered from hope, through longing and loss, to awakening. Each also has a
+// raag of its own in the room's ambience (FEELING_VOICES).
+const FEELINGS: { workId: string; urdu: string; roman: Feeling; english: string; hue: string }[] = [
   { workId: '03', urdu: 'امید', roman: 'umeed', english: 'hope', hue: '#a9bf6e' },
   { workId: '02', urdu: 'آرزو', roman: 'arzoo', english: 'longing', hue: '#dc8f8f' },
   { workId: '01', urdu: 'بےچینی', roman: 'bechaini', english: 'restlessness', hue: '#e2a64c' },
@@ -73,9 +75,11 @@ const DROP_MAX = 160
 interface FeelingsProps {
   works: WorkData[]
   onChooseWork: (work: WorkData) => void
+  /** A feeling while it is hovered or focused, and null after. */
+  onPreviewFeeling?: (feeling: Feeling | null) => void
 }
 
-export function FeelingsGrid({ works, onChooseWork }: FeelingsProps) {
+export function FeelingsGrid({ works, onChooseWork, onPreviewFeeling }: FeelingsProps) {
   const cards = FEELINGS.map((f) => ({ ...f, work: works.find((w) => w.id === f.workId) })).filter(
     (f): f is (typeof FEELINGS)[number] & { work: WorkData } => !!f.work
   )
@@ -120,6 +124,9 @@ export function FeelingsGrid({ works, onChooseWork }: FeelingsProps) {
     }
   }, [])
 
+  // Choosing a feeling unmounts the grid; the room's own raag comes back with it.
+  useEffect(() => () => onPreviewFeeling?.(null), [onPreviewFeeling])
+
   if (!cards.length) return null
   return (
     <section className="feelings" aria-labelledby="feelings-title" ref={sectionRef}>
@@ -139,6 +146,11 @@ export function FeelingsGrid({ works, onChooseWork }: FeelingsProps) {
               className="feeling"
               style={{ '--hue': f.hue } as React.CSSProperties}
               onClick={() => onChooseWork(f.work)}
+              // Hover, not touch: a tap is already a choice, and the song itself plays.
+              onPointerEnter={(e) => e.pointerType !== 'touch' && onPreviewFeeling?.(f.roman)}
+              onPointerLeave={() => onPreviewFeeling?.(null)}
+              onFocus={() => onPreviewFeeling?.(f.roman)}
+              onBlur={() => onPreviewFeeling?.(null)}
             >
               <span className="feeling-urdu" lang="ur" dir="rtl" aria-hidden="true">
                 {f.urdu}

@@ -1,11 +1,16 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AmbientEngine, type AmbientState } from './ambientEngine'
+import { AmbientEngine, type AmbientState, type Feeling } from './ambientEngine'
 
 const PREF_KEY = 'shama.ambience'
 /** After music or narration ends, the room takes a breath before it hums again. */
 const RETURN_DELAY_MS = 2500
+// A feeling sings once the pointer rests on it, and the room's own raag returns
+// only after it has left the grid: passing between cards goes straight from
+// one raag to the next instead of flickering back to Yaman in each gap.
+const FEELING_DWELL_MS = 220
+const FEELING_LINGER_MS = 700
 
 function readPref(): boolean {
   try {
@@ -31,6 +36,8 @@ export interface Ambience {
   /** Wanted, but the browser is holding all sound until the first tap. */
   waiting: boolean
   toggle: () => void
+  /** Sing a feeling's raag while it is considered; null returns to the room's own. */
+  preview: (feeling: Feeling | null) => void
 }
 
 /**
@@ -49,6 +56,7 @@ export function useAmbience(ducked: boolean): Ambience {
   const [everRan, setEverRan] = useState(false)
   const [hidden, setHidden] = useState<boolean>(() => typeof document !== 'undefined' && document.hidden)
   const heldRef = useRef(false)
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const liveRef = useRef({ enabled, ducked, hidden })
   liveRef.current = { enabled, ducked, hidden }
 
@@ -59,6 +67,7 @@ export function useAmbience(ducked: boolean): Ambience {
     })
     engineRef.current = engine
     return () => {
+      if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
       engine.dispose()
       engineRef.current = null
     }
@@ -110,10 +119,22 @@ export function useAmbience(ducked: boolean): Ambience {
     if (next && !busy && !away) engineRef.current?.play(2.5)
   }, [])
 
+  const preview = useCallback((feeling: Feeling | null) => {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
+    previewTimerRef.current = setTimeout(
+      () => {
+        previewTimerRef.current = null
+        engineRef.current?.setFeeling(feeling)
+      },
+      feeling ? FEELING_DWELL_MS : FEELING_LINGER_MS
+    )
+  }, [])
+
   return {
     enabled,
     audible: wanted && state === 'running',
     waiting: wanted && !everRan,
     toggle,
+    preview,
   }
 }
