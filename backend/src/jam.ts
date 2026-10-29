@@ -198,7 +198,10 @@ setInterval(() => {
 }, 60_000).unref()
 
 export function attachJam(server: Server, path = '/ws/mehfil') {
-  const wss = new WebSocketServer({ noServer: true })
+  // ws accepts 100 MiB messages by default, and anyone with a room link can send
+  // one; a few at once would exhaust a 512 MB instance. The largest real message
+  // (a full 50-item queue) is a few KB.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 })
 
   server.on('upgrade', (req, socket, head) => {
     let url: URL
