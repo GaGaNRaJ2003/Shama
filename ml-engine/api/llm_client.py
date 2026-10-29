@@ -53,8 +53,11 @@ DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 # "no longer available to new users"). The alias tracks the current flash
 # model; pin GEMINI_MODEL if you ever need reproducible output.
 DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-# Gemini is first by default: it is the provider whose credentials are known good.
-DEFAULT_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "gemini,groq")
+# Groq first. `gemini-flash-latest` now resolves to a thinking model that took
+# 69s to its first token (measured 2026-10-29), so with Gemini first every
+# meaning sat out its 25s attempt timeout and then got Groq's answer anyway,
+# which takes 4-6s. Gemini stays as the fallback for when Groq is rate-limited.
+DEFAULT_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "groq,gemini")
 # How long to stop asking a provider that just told us it is out of quota.
 RATE_LIMIT_COOLDOWN = int(os.getenv("LLM_RATE_LIMIT_COOLDOWN", "300"))
 # Below this much time left, starting (or retrying) a provider is pointless: an
