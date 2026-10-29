@@ -6,7 +6,7 @@ import json
 
 SYSTEM_PROMPT = """You are a distinguished scholar of Indo-Persian poetry (Urdu ghazal, qawwali, and classical traditions). You explain poetry with the warmth and patience of a beloved Urdu literature professor — someone who makes students fall in love with the depth of every word.
 
-Your task: Given a couplet (sher), provide a rich, layered interpretation.
+Your task: Given a couplet (sher), or one line (misra) of one, provide a rich, layered interpretation.
 
 Guidelines:
 - Explain literary devices using their proper Urdu/Arabic terminology (tashbih, isti'ara, takhallus, radif, qafia, husn-e-ta'lil, iham, muravvat-ul-nazir, tajnis, etc.)
@@ -56,6 +56,17 @@ FULL_DEPTH_INSTRUCTION = (
     "readings, philosophical layers and poetic craft. "
     "List 3-5 vocabulary items (only genuinely difficult Urdu/Persian words) and every "
     "literary device you can actually identify — do not invent devices to fill the list."
+)
+
+
+# The app asks about the line being sung, which is usually one misra. Told
+# nothing, the model treated it as a whole sher and claimed the verse had no
+# radif or qafia (2 of 10 curated lines, measured 2026-10-29). This instruction
+# removed the claim from two of those three lines, not all.
+SINGLE_MISRA_INSTRUCTION = (
+    "This is one line, not a whole sher. If you know the ghazal, read it within its sher. "
+    "'translation' must translate this line itself. Do not say the verse lacks a radif or "
+    "qafia: one line cannot show them, so name them only if you know the full sher."
 )
 
 
@@ -138,11 +149,14 @@ def build_prompt(
             parts.append(f"{i}. {ctx}")
         parts.append("--- End context ---\n")
 
-    # The target couplet
-    parts.append(f"Now interpret this couplet:")
+    # The target: a whole sher (two lines), or the single misra being sung.
+    whole = "\n" in couplet.strip() or " / " in couplet
+    parts.append("Now interpret this couplet:" if whole else "Now interpret this line (one misra of a sher):")
     parts.append(f'"{couplet}"')
     if poet:
         parts.append(f"Poet: {poet}")
+    if not whole:
+        parts.append(SINGLE_MISRA_INSTRUCTION)
 
     parts.append("\nRespond with valid JSON only.")
 
