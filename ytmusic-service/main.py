@@ -16,6 +16,7 @@ Run:  uvicorn main:app --port 8000   (or: python main.py)
 """
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import time
@@ -23,20 +24,39 @@ from functools import lru_cache
 from typing import Any, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from ytmusicapi import YTMusic
 
 app = FastAPI(title="Shama YT Music Bridge", version="1.0.0")
 
-# The Express backend proxies these routes, but we allow direct browser access
-# too (handy for debugging) — hence permissive CORS on this internal service.
+# The Express backend proxies these routes. Without INTERNAL_API_KEY (local dev)
+# browsers may call them directly too, which is handy for debugging; hence
+# permissive CORS.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+# Render serves this publicly, and an open YouTube Music proxy on Render's IP is
+# a fast way to get that IP rate-limited. With INTERNAL_API_KEY set here and on
+# the gateway, only the gateway gets in; unset, nothing changes.
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
+
+@app.middleware("http")
+async def require_internal_key(request: Request, call_next):
+    # scope["path"], not request.url.path: routing uses the scope, and this
+    # Starlette lets a crafted Host header change url.path (CVE-2026-48710).
+    # /health stays open for Render's health check.
+    if INTERNAL_API_KEY and request.scope["path"] != "/health":
+        sent = request.headers.get("x-internal-key", "").encode()
+        if not hmac.compare_digest(sent, INTERNAL_API_KEY.encode()):
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
 
 
 @lru_cache(maxsize=1)

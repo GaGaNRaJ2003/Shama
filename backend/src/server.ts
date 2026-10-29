@@ -23,8 +23,19 @@ const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS) || 30_000
 const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS) || 60_000
 const MAX_THUMB_BYTES = 5 * 1024 * 1024
 
-const fetchUpstream = (url: string, init: RequestInit = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) =>
-  fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+// The two Python services are public on Render too, so they can require a key
+// only this gateway holds. Unset, nothing is sent and nothing is checked.
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || ''
+
+const fetchUpstream = (url: string, init: RequestInit = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) => {
+  // Only to our own services: the thumbnail route fetches YouTube's image hosts
+  // through here as well, and the key must never travel there.
+  const ours = url.startsWith(`${YT_SERVICE_URL}/`) || url.startsWith(`${ML_ENGINE_URL}/`)
+  const headers = INTERNAL_API_KEY && ours
+    ? { ...(init.headers as Record<string, string>), 'X-Internal-Key': INTERNAL_API_KEY }
+    : init.headers
+  return fetch(url, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) })
+}
 
 const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000,http://127.0.0.1:3000')
   .split(',')

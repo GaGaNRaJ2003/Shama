@@ -256,9 +256,16 @@ Environment variables per service:
 
 | Service | Variables |
 |---|---|
-| `shama-api` | `FRONTEND_URL` (CORS allowlist), `YT_SERVICE_URL`, `ML_ENGINE_URL` (full URLs with scheme), optional `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
-| `shama-ml-engine` | `GROQ_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`; optional `LLM_PROVIDER_ORDER`, `GROQ_MODEL`, `GEMINI_MODEL`, `RAG_ENABLED` |
-| `shama-yt-service` | none |
+| `shama-api` | `FRONTEND_URL` (CORS allowlist), `YT_SERVICE_URL`, `ML_ENGINE_URL` (full URLs with scheme), `INTERNAL_API_KEY`; optional `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
+| `shama-ml-engine` | `GROQ_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `INTERNAL_API_KEY`; optional `LLM_PROVIDER_ORDER`, `GROQ_MODEL`, `GEMINI_MODEL`, `RAG_ENABLED` |
+| `shama-yt-service` | `INTERNAL_API_KEY` |
+
+`INTERNAL_API_KEY` is one shared random value, the same on all three services.
+The two Python services are public on Render, so this key is what keeps
+everyone except the gateway out of them, and out from under its rate limits.
+Unset, nothing is sent and nothing is checked. Set it on `shama-api` first and
+on the two Python services after; the other order rejects the gateway until the
+gateway also has it.
 
 Deploy order:
 

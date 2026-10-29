@@ -14,6 +14,7 @@ Run:
 Serves at: http://127.0.0.1:8001
 """
 
+import hmac
 import logging
 import os
 import sys
@@ -23,8 +24,9 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Load .env from project root first, then ml-engine local
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -139,6 +141,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Render serves this publicly as well as to the gateway, so anyone could skip
+# the gateway's rate limits and spend the LLM quota. With INTERNAL_API_KEY set
+# here and on the gateway, only the gateway gets in; unset, nothing changes.
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
+
+@app.middleware("http")
+async def require_internal_key(request: Request, call_next):
+    # scope["path"], not request.url.path: routing uses the scope, and this
+    # Starlette lets a crafted Host header change url.path (CVE-2026-48710).
+    # /health stays open for Render's health check.
+    if INTERNAL_API_KEY and request.scope["path"] != "/health":
+        sent = request.headers.get("x-internal-key", "").encode()
+        if not hmac.compare_digest(sent, INTERNAL_API_KEY.encode()):
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
+
 
 # Mount TTS router
 app.include_router(tts_router)
