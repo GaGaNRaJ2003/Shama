@@ -78,12 +78,15 @@ export function MeaningPanel({
   onToggleNarration,
   emptyPrompt = 'Choose a couplet to sit with it a while.',
 }: MeaningPanelProps) {
-  const simple = meaning?.simple || fallback?.simple || ''
-  const detailed = meaning?.detailed || fallback?.detailed || ''
+  // A curated line's hand-written reading comes first. Measured against these
+  // readings, the AI's got the gist right about 8 times in 10 and was almost
+  // never free of small errors (2026-10-29).
+  const simple = fallback?.simple || meaning?.simple || ''
+  const detailed = fallback?.detailed || meaning?.detailed || ''
   const vocabulary =
-    meaning?.vocabulary && meaning.vocabulary.length > 0
-      ? meaning.vocabulary
-      : fallback?.vocabulary || []
+    fallback?.vocabulary && fallback.vocabulary.length > 0
+      ? fallback.vocabulary
+      : meaning?.vocabulary || []
 
   return (
     <section aria-labelledby="study-heading">

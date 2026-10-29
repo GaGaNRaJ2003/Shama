@@ -1649,11 +1649,19 @@ export function App() {
       : studyTab === 'CONTEXT'
       ? ytMeaning?.detailed || selectedYtLine?.combined_text || ''
       : (ytMeaning?.vocabulary || []).map((v) => `${v.term} means ${v.meaning}`).join('. ')
-    : studyTab === 'MEANING'
-    ? aiMeaning?.simple || activeLine.simple
+    : // As in the panel: the curated line's hand-written reading comes first.
+    studyTab === 'MEANING'
+    ? adhocLine
+      ? aiMeaning?.simple || activeLine.simple
+      : activeLine.simple || aiMeaning?.simple || ''
     : studyTab === 'CONTEXT'
-    ? aiMeaning?.detailed || activeLine.detailed
-    : (aiMeaning?.vocabulary || activeLine.vocabulary)
+    ? adhocLine
+      ? aiMeaning?.detailed || activeLine.detailed
+      : activeLine.detailed || aiMeaning?.detailed || ''
+    : (adhocLine || !activeLine.vocabulary.length
+        ? aiMeaning?.vocabulary || activeLine.vocabulary
+        : activeLine.vocabulary
+      )
         .map((v) => `${v.term} means ${v.meaning}`)
         .join('. ')
 
