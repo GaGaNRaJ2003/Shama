@@ -242,19 +242,14 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'shama-api', db: isDbConfigured })
 })
 
-// GET /api/warm — the frontend calls this as the page loads. Render's free tier
-// puts each service to sleep after 15 idle minutes, and the first request then
-// waits 20-90s or gets an instant 503. Pinging both services' bare /health here
-// starts them waking while the listener is still choosing what to hear.
+// GET /api/warm — the frontend calls this as the page loads, to wake what
+// Render's free tier put to sleep after 15 idle minutes. The call itself wakes
+// this gateway. The two Python services have to be pinged by the browser:
+// a request from here to a sleeping service gets an instant 503 and doesn't
+// wake it (seen twice on 2026-10-29), while one from outside Render is held
+// until the service is up. So this only says what to ping.
 app.get('/api/warm', rateLimit('warm', 30, 60_000), (_req, res) => {
-  for (const base of [YT_SERVICE_URL, ML_ENGINE_URL]) {
-    // Not awaited: nobody should wait for a service to wake. The body is
-    // discarded so the connection is released.
-    fetchUpstream(`${base}/health`, {}, 120_000)
-      .then((r) => r.body?.cancel())
-      .catch(() => {})
-  }
-  res.status(202).end()
+  res.json({ ping: [`${YT_SERVICE_URL}/health`, `${ML_ENGINE_URL}/health`] })
 })
 
 /**

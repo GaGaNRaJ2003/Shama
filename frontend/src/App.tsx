@@ -681,14 +681,21 @@ export function App() {
 
   // Wake the services behind the API while the listener is still choosing:
   // Render's free tier sleeps them after 15 idle minutes, and the first real
-  // request then waits up to 90s or fails. Tried once more in case the API
-  // itself was asleep and missed the first call.
+  // request then fails. The API names their health checks; the pings must come
+  // from here, because the API's own request to a sleeping service fails at
+  // once instead of waking it. Tried once more if the API was asleep too.
   useEffect(() => {
     let retry: ReturnType<typeof setTimeout> | undefined
     const warm = (again: boolean) =>
       fetch(`${API_BASE}/api/warm`)
-        .then((res) => {
-          if (!res.ok && again) retry = setTimeout(() => warm(false), 15_000)
+        .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+        .then((data: { ping?: unknown }) => {
+          for (const url of Array.isArray(data.ping) ? data.ping : []) {
+            // Opaque and unread: sending it is what wakes the service.
+            if (typeof url === 'string' && /^https?:\/\/[^/]+\/health$/.test(url)) {
+              fetch(url, { mode: 'no-cors' }).catch(() => {})
+            }
+          }
         })
         .catch(() => {
           if (again) retry = setTimeout(() => warm(false), 15_000)
